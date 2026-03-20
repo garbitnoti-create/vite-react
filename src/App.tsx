@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, setDoc, onSnapshot } from "firebase/firestore";
+import { getFirestore, doc, setDoc, onSnapshot, getDoc } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: "AIzaSyB34CnRd89JFmzJ5fwZvNFRdPDWKZmNkzA",
@@ -204,7 +204,7 @@ export default function App() {
   );
 
   return (
-    <div style={{ minHeight: "100vh", backgroundColor: "#f1f5f9", fontFamily: "system-ui, -apple-system, sans-serif" }}>
+    <div style={{ minHeight: "100vh", backgroundColor: "#f1f5f9", maxWidth: "480px", margin: "0 auto", fontFamily: "system-ui, -apple-system, sans-serif" }}>
       {toast && <div style={{ position: "fixed", top: "16px", left: "50%", transform: "translateX(-50%)", backgroundColor: toast.color, color: "#fff", padding: "12px 24px", borderRadius: "100px", fontSize: "14px", fontWeight: "700", zIndex: 100, whiteSpace: "nowrap", boxShadow: "0 4px 20px rgba(0,0,0,0.2)" }}>{toast.msg}</div>}
 
       <div style={{ backgroundColor: "#1a1a2e", color: "#fff", padding: "20px 16px 0", position: "sticky", top: 0, zIndex: 40 }}>
@@ -215,7 +215,7 @@ export default function App() {
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
             {syncing && <div style={{ width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#4ecdc4" }} />}
-            <button onClick={() => setShowSettings(true)} style={{ width: "42px", height: "42px", borderRadius: "50%", backgroundColor: "rgba(255,255,255,0.12)", border: "none", fontSize: "18px", cursor: "pointer" }}>⚙️</button>
+            <button onClick={() => setShowSettings(true)} style={{ width: "42px", height: "42px", borderRadius: "50%", backgroundColor: "rgba(255,255,255,0.12)", border: "none", fontSize: "18px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>⚙️</button>
           </div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "16px" }}>
@@ -345,8 +345,8 @@ export default function App() {
       </div>
 
       <div style={{ position: "fixed", bottom: "24px", right: "20px", zIndex: 40 }}>
-        {tab === "stock" && <button onClick={() => setShowStock(true)} style={{ width: "58px", height: "58px", borderRadius: "50%", backgroundColor: "#4ecdc4", border: "none", fontSize: "30px", color: "#fff", cursor: "pointer", boxShadow: "0 6px 24px rgba(78,205,196,0.5)", fontWeight: "700" }}>+</button>}
-        {tab === "ventes" && <button onClick={() => setShowVente(true)} style={{ width: "58px", height: "58px", borderRadius: "50%", backgroundColor: "#e94560", border: "none", fontSize: "30px", color: "#fff", cursor: "pointer", boxShadow: "0 6px 24px rgba(233,69,96,0.5)", fontWeight: "700" }}>+</button>}
+        {tab === "stock" && <button onClick={() => setShowStock(true)} style={{ width: "58px", height: "58px", borderRadius: "50%", backgroundColor: "#4ecdc4", border: "none", fontSize: "30px", color: "#fff", cursor: "pointer", boxShadow: "0 6px 24px rgba(78,205,196,0.5)", fontWeight: "700", display: "flex", alignItems: "center", justifyContent: "center", lineHeight: "1" }}>+</button>}
+        {tab === "ventes" && <button onClick={() => setShowVente(true)} style={{ width: "58px", height: "58px", borderRadius: "50%", backgroundColor: "#e94560", border: "none", fontSize: "30px", color: "#fff", cursor: "pointer", boxShadow: "0 6px 24px rgba(233,69,96,0.5)", fontWeight: "700", display: "flex", alignItems: "center", justifyContent: "center", lineHeight: "1" }}>+</button>}
       </div>
 
       {showVente && (
