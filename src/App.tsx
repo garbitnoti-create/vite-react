@@ -223,7 +223,7 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, onAddVente
       </div>
 
       {tab === "ventes" && (
-        <button onClick={() => setShowVente(true)} style={{ position: "fixed", bottom: "24px", right: "20px", width: "58px", height: "58px", borderRadius: "50%", backgroundColor: "#e94560", border: "none", fontSize: "30px", color: "#fff", cursor: "pointer", boxShadow: "0 6px 24px rgba(233,69,96,0.5)", fontWeight: "700", zIndex: 40, display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>
+        <button onClick={() => setShowVente(true)} style={{ position: "fixed", bottom: "32px", right: "20px", width: "58px", height: "58px", borderRadius: "50%", backgroundColor: "#e94560", border: "none", fontSize: "30px", color: "#fff", cursor: "pointer", boxShadow: "0 6px 24px rgba(233,69,96,0.5)", fontWeight: "700", zIndex: 40, display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>
       )}
 
       {showVente && (
@@ -506,7 +506,7 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
         ))}
       </div>
 
-      <div style={{ position: "fixed", bottom: "24px", right: "20px", zIndex: 40 }}>
+      <div style={{ position: "fixed", bottom: "32px", right: "20px", zIndex: 40 }}>
         {tab === "stock" && <button onClick={() => setShowStock(true)} style={{ width: "58px", height: "58px", borderRadius: "50%", backgroundColor: "#4ecdc4", border: "none", fontSize: "30px", color: "#fff", cursor: "pointer", boxShadow: "0 6px 24px rgba(78,205,196,0.5)", fontWeight: "700", display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>}
         {tab === "ventes" && <button onClick={() => setShowVente(true)} style={{ width: "58px", height: "58px", borderRadius: "50%", backgroundColor: "#e94560", border: "none", fontSize: "30px", color: "#fff", cursor: "pointer", boxShadow: "0 6px 24px rgba(233,69,96,0.5)", fontWeight: "700", display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>}
       </div>
