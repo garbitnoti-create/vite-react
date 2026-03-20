@@ -282,6 +282,8 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
   const [venteForm, setVenteForm] = useState({ vendeur: vendeurs[0]?.nom || "", stockId: "", prixVente: "", note: "" });
   const [stockForm, setStockForm] = useState({ nom: "", categorie: "Vêtements", prixAchat: "", quantite: "1" });
   const [paiementForm, setPaiementForm] = useState({ montant: "", note: "" });
+  const [showAjustement, setShowAjustement] = useState<any>(null);
+  const [ajustementForm, setAjustementForm] = useState({ montant: "", note: "", type: "prime" });
 
   const showToast = (msg: string, color = "#22c55e") => { setToast({ msg, color }); setTimeout(() => setToast(null), 3000); };
   const saveSync = async (key: string, data: any) => { setSyncing(true); await save(key, data); setTimeout(() => setSyncing(false), 800); };
@@ -361,6 +363,17 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
     setPaiements(newP); await saveSync("paiements", newP);
     setPaiementForm({ montant: "", note: "" }); setShowPaiement(null);
     showToast(`Paiement de ${fmt(+paiementForm.montant)} enregistré ✓`);
+  };
+
+  const addAjustement = async () => {
+    if (!showAjustement || !ajustementForm.montant) return;
+    const montant = ajustementForm.type === "prime" ? +ajustementForm.montant : -Math.abs(+ajustementForm.montant);
+    // On utilise un paiement négatif pour une prime (augmente le solde dû) et positif pour une déduction
+    const p = { id: Date.now(), vendeur: showAjustement, montant: -montant, date: fmtDate(), note: ajustementForm.note || (ajustementForm.type === "prime" ? "Prime" : ajustementForm.type === "dette" ? "Dette initiale" : "Déduction"), type: ajustementForm.type };
+    const newP = [p, ...paiements];
+    setPaiements(newP); await saveSync("paiements", newP);
+    setAjustementForm({ montant: "", note: "", type: "prime" }); setShowAjustement(null);
+    showToast(`Ajustement enregistré ✓`);
   };
 
   const saveVendeurs = async () => { await saveSync("vendeurs", vendeurs); setShowSettings(false); showToast("Commissions sauvegardées ✓"); };
@@ -489,7 +502,10 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
                 <div style={{ fontSize: "20px", fontWeight: "800", color: v.solde > 0 ? "#ef4444" : "#16a34a" }}>{fmt(v.solde)}</div>
                 <div style={{ fontSize: "11px", color: "#94a3b8", marginTop: "2px" }}>Déjà payé : {fmt(v.totalPaye)}</div>
               </div>
-              {v.solde > 0 && <button onClick={() => { setShowPaiement(v.nom); setPaiementForm({ montant: v.solde.toFixed(2), note: "" }); }} style={{ backgroundColor: "#e94560", color: "#fff", border: "none", borderRadius: "12px", padding: "10px 16px", fontWeight: "700", fontSize: "14px", cursor: "pointer" }}>💸 Payer</button>}
+              <div style={{ display: "flex", gap: "8px" }}>
+                {v.solde > 0 && <button onClick={() => { setShowPaiement(v.nom); setPaiementForm({ montant: v.solde.toFixed(2), note: "" }); }} style={{ backgroundColor: "#e94560", color: "#fff", border: "none", borderRadius: "12px", padding: "10px 16px", fontWeight: "700", fontSize: "14px", cursor: "pointer" }}>💸 Payer</button>}
+                <button onClick={() => { setShowAjustement(v.nom); setAjustementForm({ montant: "", note: "", type: "prime" }); }} style={{ backgroundColor: "#a29bfe", color: "#fff", border: "none", borderRadius: "12px", padding: "10px 16px", fontWeight: "700", fontSize: "14px", cursor: "pointer" }}>✏️ Ajuster</button>
+              </div>
             </div>
             {paiements.filter((p: any) => p.vendeur === v.nom).length > 0 && (
               <div style={{ marginTop: "10px" }}>
@@ -604,6 +620,38 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
               <Field label="Montant payé (€)"><TInput type="number" value={paiementForm.montant} onChange={(v: string) => setPaiementForm({ ...paiementForm, montant: v })} placeholder="Ex: 50" /></Field>
               <Field label="Note (optionnel)"><TInput value={paiementForm.note} onChange={(v: string) => setPaiementForm({ ...paiementForm, note: v })} placeholder="Ex: virement Lydia" /></Field>
               <button onClick={addPaiement} disabled={!paiementForm.montant} style={S.btn("#22c55e", !paiementForm.montant)}>Confirmer ✓</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showAjustement && (
+        <div style={S.overlay} onClick={(e: any) => e.target === e.currentTarget && setShowAjustement(null)}>
+          <div style={S.modal}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
+              <div style={{ fontSize: "18px", fontWeight: "800", color: "#1a1a2e" }}>✏️ Ajuster — {showAjustement}</div>
+              <button onClick={() => setShowAjustement(null)} style={{ background: "none", border: "none", fontSize: "22px", color: "#94a3b8", cursor: "pointer" }}>✕</button>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+              <Field label="Type d'ajustement">
+                <Select value={ajustementForm.type} onChange={(v: string) => setAjustementForm({ ...ajustementForm, type: v })}
+                  options={[{ value: "prime", label: "➕ Prime (augmente ce qu'on lui doit)" }, { value: "dette", label: "📋 Dette initiale (il nous devait déjà)" }, { value: "deduction", label: "➖ Déduction (on lui enlève)" }]} />
+              </Field>
+              <Field label="Montant (€)">
+                <TInput type="number" value={ajustementForm.montant} onChange={(v: string) => setAjustementForm({ ...ajustementForm, montant: v })} placeholder="Ex: 15" />
+              </Field>
+              <Field label="Note (optionnel)">
+                <TInput value={ajustementForm.note} onChange={(v: string) => setAjustementForm({ ...ajustementForm, note: v })} placeholder="Ex: prime de bienvenue" />
+              </Field>
+              {ajustementForm.montant && (
+                <div style={{ backgroundColor: "#f0f4ff", borderRadius: "14px", padding: "14px", textAlign: "center", border: "2px solid #c7d2fe" }}>
+                  <div style={{ fontSize: "11px", color: "#6366f1", fontWeight: "700", textTransform: "uppercase", marginBottom: "6px" }}>Impact sur le solde</div>
+                  <div style={{ fontSize: "20px", fontWeight: "800", color: ajustementForm.type === "deduction" ? "#16a34a" : "#e94560" }}>
+                    {ajustementForm.type === "deduction" ? "-" : "+"}{fmt(+ajustementForm.montant)}
+                  </div>
+                </div>
+              )}
+              <button onClick={addAjustement} disabled={!ajustementForm.montant} style={S.btn("#a29bfe", !ajustementForm.montant)}>Confirmer l'ajustement ✓</button>
             </div>
           </div>
         </div>
