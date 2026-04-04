@@ -36,6 +36,9 @@ const params = new URLSearchParams(window.location.search);
 const IS_ADMIN = params.get("admin") === "true";
 const VENDEUR_PARAM = params.get("v")?.toLowerCase() || null;
 
+// Valeur spéciale pour vente perso (sans vendeur)
+const VENTE_PERSO_KEY = "__MOI__";
+
 const S: any = {
   card: { backgroundColor: "#fff", borderRadius: "16px", padding: "16px", marginBottom: "12px", boxShadow: "0 1px 4px rgba(0,0,0,0.07)", border: "1px solid #f1f5f9" },
   overlay: { position: "fixed" as const, inset: 0, backgroundColor: "rgba(0,0,0,0.55)", zIndex: 50, display: "flex", alignItems: "flex-end" },
@@ -283,7 +286,8 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
   const [editStock, setEditStock] = useState<any>(null);
   const [showPaiement, setShowPaiement] = useState<any>(null);
   const [syncing, setSyncing] = useState(false);
-  const [venteForm, setVenteForm] = useState({ vendeur: vendeurs[0]?.nom || "", stockId: "", prixVente: "", note: "" });
+  // Par défaut : vente perso (Moi)
+  const [venteForm, setVenteForm] = useState({ vendeur: VENTE_PERSO_KEY, stockId: "", prixVente: "", note: "" });
   const [stockForm, setStockForm] = useState({ nom: "", categorie: "Vêtements", prixAchat: "", quantite: "1" });
   const [paiementForm, setPaiementForm] = useState({ montant: "", note: "" });
   const [showAjustement, setShowAjustement] = useState<any>(null);
@@ -334,21 +338,48 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
   };
 
   const addVente = async () => {
-    if (!venteForm.vendeur || !venteForm.stockId || !venteForm.prixVente) return;
+    if (!venteForm.stockId || !venteForm.prixVente) return;
     const article = stock.find((s: any) => s.id === +venteForm.stockId);
-    const vendeur = vendeurs.find((v: any) => v.nom === venteForm.vendeur);
-    if (!article || !vendeur) return;
+    if (!article) return;
+
+    const isVentePerso = venteForm.vendeur === VENTE_PERSO_KEY;
+    const vendeur = isVentePerso ? null : vendeurs.find((v: any) => v.nom === venteForm.vendeur);
+    if (!isVentePerso && !vendeur) return;
+
     const prixVente = +venteForm.prixVente;
     const benefBrut = prixVente - article.prixAchat;
-    const commissionMontant = benefBrut * (vendeur.commission / 100);
+    // Vente perso : 0% commission, 100% bénéfice entreprise
+    const commissionMontant = isVentePerso ? 0 : benefBrut * (vendeur!.commission / 100);
     const partEntreprise = benefBrut - commissionMontant;
-    const vente = { id: Date.now(), date: fmtDate(), mois: moisActuel(), vendeur: vendeur.nom, commission: vendeur.commission, article: article.nom, prixAchat: article.prixAchat, prixVente, benefBrut, commissionMontant, partEntreprise, note: venteForm.note };
+
+    const vente = {
+      id: Date.now(),
+      date: fmtDate(),
+      mois: moisActuel(),
+      vendeur: isVentePerso ? "Moi" : vendeur!.nom,
+      commission: isVentePerso ? 0 : vendeur!.commission,
+      ventePerso: isVentePerso,
+      article: article.nom,
+      prixAchat: article.prixAchat,
+      prixVente,
+      benefBrut,
+      commissionMontant,
+      partEntreprise,
+      note: venteForm.note,
+    };
+
     const newVentes = [vente, ...ventes];
     const newStock = stock.map((s: any) => s.id === article.id ? { ...s, quantite: s.quantite - 1 } : s);
     setVentes(newVentes); setStock(newStock);
     await Promise.all([saveSync("ventes", newVentes), saveSync("stock", newStock)]);
-    setVenteForm({ vendeur: vendeurs[0]?.nom || "", stockId: "", prixVente: "", note: "" });
-    setShowVente(false); showToast(`Bénéfice entreprise : ${fmt(partEntreprise)} ✓`);
+    setVenteForm({ vendeur: VENTE_PERSO_KEY, stockId: "", prixVente: "", note: "" });
+    setShowVente(false);
+
+    if (isVentePerso) {
+      showToast(`Vente perso enregistrée ! Bénéfice : ${fmt(partEntreprise)} ✓`);
+    } else {
+      showToast(`Bénéfice entreprise : ${fmt(partEntreprise)} ✓`);
+    }
   };
 
   const deleteVente = async (id: number) => {
@@ -372,7 +403,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
   const addAjustement = async () => {
     if (!showAjustement || !ajustementForm.montant) return;
     const montant = ajustementForm.type === "prime" ? +ajustementForm.montant : -Math.abs(+ajustementForm.montant);
-    // On utilise un paiement négatif pour une prime (augmente le solde dû) et positif pour une déduction
     const p = { id: Date.now(), vendeur: showAjustement, montant: -montant, date: fmtDate(), note: ajustementForm.note || (ajustementForm.type === "prime" ? "Prime" : ajustementForm.type === "dette" ? "Dette initiale" : "Déduction"), type: ajustementForm.type };
     const newP = [p, ...paiements];
     setPaiements(newP); await saveSync("paiements", newP);
@@ -460,12 +490,21 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
             : ventes.map((v: any) => (
               <div key={v.id} style={S.card}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                  <div><div style={{ fontWeight: "700", fontSize: "16px", color: "#1a1a2e" }}>{v.article}</div><div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "2px" }}>{v.date} · {v.vendeur} ({v.commission}%)</div></div>
+                  <div>
+                    <div style={{ fontWeight: "700", fontSize: "16px", color: "#1a1a2e" }}>{v.article}</div>
+                    <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "2px" }}>
+                      {v.date} ·{" "}
+                      {v.ventePerso
+                        ? <span style={{ color: "#a29bfe", fontWeight: "700" }}>👤 Moi (perso)</span>
+                        : `${v.vendeur} (${v.commission}%)`
+                      }
+                    </div>
+                  </div>
                   <button onClick={() => deleteVente(v.id)} style={{ background: "none", border: "none", color: "#cbd5e1", fontSize: "18px", cursor: "pointer" }}>✕</button>
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px", marginTop: "12px" }}>
+                <div style={{ display: "grid", gridTemplateColumns: v.ventePerso ? "1fr 1fr" : "1fr 1fr 1fr", gap: "8px", marginTop: "12px" }}>
                   <MiniStat label="Vendu" value={fmt(v.prixVente)} color="#4ecdc4" />
-                  <MiniStat label="Commission" value={fmt(v.commissionMontant)} color="#f7b731" />
+                  {!v.ventePerso && <MiniStat label="Commission" value={fmt(v.commissionMontant)} color="#f7b731" />}
                   <MiniStat label="Entreprise" value={fmt(v.partEntreprise)} color="#e94560" />
                 </div>
                 {v.note && <div style={{ marginTop: "8px", fontSize: "12px", color: "#94a3b8", fontStyle: "italic" }}>📝 {v.note}</div>}
@@ -531,6 +570,7 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
         {tab === "ventes" && <button onClick={() => setShowVente(true)} style={{ width: "58px", height: "58px", borderRadius: "50%", backgroundColor: "#e94560", border: "none", fontSize: "30px", color: "#fff", cursor: "pointer", boxShadow: "0 6px 24px rgba(233,69,96,0.5)", fontWeight: "700", display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>}
       </div>
 
+      {/* ── MODAL NOUVELLE VENTE ── */}
       {showVente && (
         <div style={S.overlay} onClick={(e: any) => e.target === e.currentTarget && setShowVente(false)}>
           <div style={S.modal}>
@@ -539,33 +579,66 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
               <button onClick={() => setShowVente(false)} style={{ background: "none", border: "none", fontSize: "22px", color: "#94a3b8", cursor: "pointer" }}>✕</button>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-              <Field label="Vendeur"><Select value={venteForm.vendeur} onChange={(v: string) => setVenteForm({ ...venteForm, vendeur: v })} options={vendeurs.map((v: any) => ({ value: v.nom, label: `${v.nom} (${v.commission}%)` }))} /></Field>
+
+              {/* Sélecteur vendeur avec option "Moi" en tête */}
+              <Field label="Vendu par">
+                <Select
+                  value={venteForm.vendeur}
+                  onChange={(v: string) => setVenteForm({ ...venteForm, vendeur: v })}
+                  options={[
+                    { value: VENTE_PERSO_KEY, label: "👤 Moi (vente perso — 0% commission)" },
+                    ...vendeurs.map((v: any) => ({ value: v.nom, label: `${v.nom} (${v.commission}%)` }))
+                  ]}
+                />
+              </Field>
+
+              {/* Badge visuel si vente perso */}
+              {venteForm.vendeur === VENTE_PERSO_KEY && (
+                <div style={{ backgroundColor: "#f5f3ff", borderRadius: "12px", padding: "10px 14px", border: "2px solid #ddd6fe", display: "flex", alignItems: "center", gap: "8px" }}>
+                  <span style={{ fontSize: "16px" }}>👤</span>
+                  <span style={{ fontSize: "13px", fontWeight: "700", color: "#7c3aed" }}>Vente perso · 100% bénéfice entreprise</span>
+                </div>
+              )}
+
               <Field label="Article vendu">
                 {stockDispo.length === 0
                   ? <div style={{ backgroundColor: "#fef2f2", color: "#ef4444", padding: "14px", borderRadius: "12px", fontSize: "13px", fontWeight: "600", textAlign: "center" }}>⚠️ Stock vide</div>
-                  : <Select value={venteForm.stockId} onChange={(v: string) => setVenteForm({ ...venteForm, stockId: v })} placeholder="Choisir un article..." options={stockDispo.map((s: any) => ({ value: String(s.id), label: `${s.nom} — achat ${fmt(s.prixAchat)} (×${s.quantite})` }))} />
+                  : <Select value={venteForm.stockId} onChange={(v: string) => setVenteForm({ ...venteForm, stockId: v })} placeholder="Choisir un article..."
+                      options={stockDispo.map((s: any) => ({ value: String(s.id), label: `${s.nom} — achat ${fmt(s.prixAchat)} (×${s.quantite})` }))} />
                 }
               </Field>
-              <Field label="Prix de vente (€)"><TInput type="number" value={venteForm.prixVente} onChange={(v: string) => setVenteForm({ ...venteForm, prixVente: v })} placeholder="Ex: 50" /></Field>
+
+              <Field label="Prix de vente (€)">
+                <TInput type="number" value={venteForm.prixVente} onChange={(v: string) => setVenteForm({ ...venteForm, prixVente: v })} placeholder="Ex: 50" />
+              </Field>
+
+              {/* Aperçu de la répartition */}
               {venteForm.stockId && venteForm.prixVente && (() => {
                 const article = stock.find((s: any) => s.id === +venteForm.stockId);
-                const vendeur = vendeurs.find((v: any) => v.nom === venteForm.vendeur);
-                if (!article || !vendeur) return null;
+                if (!article) return null;
                 const benef = +venteForm.prixVente - article.prixAchat;
-                const comm = benef * vendeur.commission / 100;
+                const isPerso = venteForm.vendeur === VENTE_PERSO_KEY;
+                const vendeur = isPerso ? null : vendeurs.find((v: any) => v.nom === venteForm.vendeur);
+                const comm = isPerso ? 0 : benef * (vendeur?.commission ?? 0) / 100;
                 return (
                   <div style={{ backgroundColor: "#f0fdf4", borderRadius: "14px", padding: "14px", border: "2px solid #bbf7d0" }}>
                     <div style={{ fontSize: "10px", fontWeight: "800", color: "#16a34a", marginBottom: "10px", textTransform: "uppercase" }}>Aperçu</div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px", textAlign: "center" }}>
-                      <MiniStat label="Bénéfice" value={fmt(benef)} />
-                      <MiniStat label="Commission" value={fmt(comm)} color="#f7b731" />
+                    <div style={{ display: "grid", gridTemplateColumns: isPerso ? "1fr 1fr" : "1fr 1fr 1fr", gap: "8px", textAlign: "center" }}>
+                      <MiniStat label="Bénéfice brut" value={fmt(benef)} />
+                      {!isPerso && <MiniStat label="Commission" value={fmt(comm)} color="#f7b731" />}
                       <MiniStat label="Entreprise" value={fmt(benef - comm)} color="#e94560" />
                     </div>
                   </div>
                 );
               })()}
-              <Field label="Note (optionnel)"><TInput value={venteForm.note} onChange={(v: string) => setVenteForm({ ...venteForm, note: v })} placeholder="Ex: payé par virement" /></Field>
-              <button onClick={addVente} disabled={!venteForm.stockId || !venteForm.prixVente} style={S.btn("#e94560", !venteForm.stockId || !venteForm.prixVente)}>Enregistrer ✓</button>
+
+              <Field label="Note (optionnel)">
+                <TInput value={venteForm.note} onChange={(v: string) => setVenteForm({ ...venteForm, note: v })} placeholder="Ex: payé par virement" />
+              </Field>
+
+              <button onClick={addVente} disabled={!venteForm.stockId || !venteForm.prixVente} style={S.btn("#e94560", !venteForm.stockId || !venteForm.prixVente)}>
+                Enregistrer ✓
+              </button>
             </div>
           </div>
         </div>
@@ -721,12 +794,10 @@ export default function App() {
     </div>
   );
 
-  // Mode admin
   if (IS_ADMIN) {
     return <AppAdmin vendeurs={vendeurs} setVendeurs={setVendeurs} stock={stock} setStock={setStock} ventes={ventes} setVentes={setVentes} paiements={paiements} setPaiements={setPaiements} save={save} />;
   }
 
-  // Mode vendeur
   if (VENDEUR_PARAM) {
     const vendeurTrouve = vendeurs.find((v: any) => v.nom.toLowerCase() === VENDEUR_PARAM);
     if (!vendeurTrouve) return <PageInconnue />;
