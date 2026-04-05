@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, setDoc, onSnapshot } from "firebase/firestore";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, CartesianGrid } from "recharts";
 
 const firebaseConfig = {
   apiKey: "AIzaSyB34CnRd89JFmzJ5fwZvNFRdPDWKZmNkzA",
@@ -31,12 +32,15 @@ const fmtDate = () => new Date().toLocaleDateString("fr-FR");
 const moisActuel = () => { const d = new Date(); return `${d.getMonth()}-${d.getFullYear()}`; };
 const moisLabel = () => new Date().toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
 
-// Détection du mode via URL
+const getMoisLabel = (moisKey: string) => {
+  const [m, y] = moisKey.split("-").map(Number);
+  const d = new Date(y, m, 1);
+  return d.toLocaleDateString("fr-FR", { month: "short", year: "2-digit" });
+};
+
 const params = new URLSearchParams(window.location.search);
 const IS_ADMIN = params.get("admin") === "true";
 const VENDEUR_PARAM = params.get("v")?.toLowerCase() || null;
-
-// Valeur spéciale pour vente perso (sans vendeur)
 const VENTE_PERSO_KEY = "__MOI__";
 
 const S: any = {
@@ -76,6 +80,19 @@ function MiniStat({ label, value, color }: any) {
       <div style={{ fontSize: "9px", color: "#94a3b8", textTransform: "uppercase" as const, fontWeight: "700" }}>{label}</div>
       <div style={{ fontSize: "13px", fontWeight: "800", color: color || "#1a1a2e", marginTop: "4px" }}>{value}</div>
     </div>
+  );
+}
+
+// Vignette photo article
+function ArticlePhoto({ url, size = 48 }: { url?: string; size?: number }) {
+  if (!url) return (
+    <div style={{ width: size, height: size, borderRadius: "10px", backgroundColor: "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center", fontSize: size * 0.4, flexShrink: 0 }}>
+      📦
+    </div>
+  );
+  return (
+    <img src={url} alt="article" style={{ width: size, height: size, borderRadius: "10px", objectFit: "cover", flexShrink: 0, border: "1px solid #e2e8f0" }}
+      onError={(e: any) => { e.target.style.display = "none"; }} />
   );
 }
 
@@ -120,6 +137,8 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, onAddVente
     }).sort((a: any, b: any) => b.nb - a.nb);
   }, [ventes, vendeurs]);
 
+  const articleSelectionne = stock.find((s: any) => s.id === +venteForm.stockId);
+
   const addVente = async () => {
     if (!venteForm.stockId || !venteForm.prixVente) return;
     const article = stock.find((s: any) => s.id === +venteForm.stockId);
@@ -147,8 +166,6 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, onAddVente
           <div style={{ color: "#e94560", fontSize: "10px", fontWeight: "800", textTransform: "uppercase", letterSpacing: "0.12em" }}>Vinted Business</div>
           <div style={{ fontSize: "22px", fontWeight: "800", marginTop: "2px" }}>Bonjour {nomAffiche} 👋</div>
         </div>
-
-        {/* Solde vendeur */}
         <div style={{ backgroundColor: "rgba(255,255,255,0.08)", borderRadius: "14px", padding: "14px", marginBottom: "10px" }}>
           <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.45)", textTransform: "uppercase", fontWeight: "700", marginBottom: "4px" }}>💰 Total gagné</div>
           <div style={{ fontSize: "24px", fontWeight: "800", color: "#f7b731" }}>{fmt(mesVentes.reduce((s: number, v: any) => s + v.commissionMontant, 0))}</div>
@@ -156,14 +173,13 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, onAddVente
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "16px" }}>
           <div style={{ backgroundColor: "rgba(255,255,255,0.08)", borderRadius: "14px", padding: "12px" }}>
             <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.45)", textTransform: "uppercase", fontWeight: "700" }}>✅ Déjà payé</div>
-            <div style={{ fontSize: "16px", fontWeight: "800", color: "#4ecdc4", marginTop: "4px" }}>{fmt(paiements.filter((p: any) => p.vendeur.toLowerCase() === nomVendeur.toLowerCase() && (p.montant > 0)).reduce((s: number, p: any) => s + p.montant, 0))}</div>
+            <div style={{ fontSize: "16px", fontWeight: "800", color: "#4ecdc4", marginTop: "4px" }}>{fmt(paiements.filter((p: any) => p.vendeur.toLowerCase() === nomVendeur.toLowerCase() && p.montant > 0).reduce((s: number, p: any) => s + p.montant, 0))}</div>
           </div>
           <div style={{ backgroundColor: "rgba(255,255,255,0.08)", borderRadius: "14px", padding: "12px" }}>
             <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.45)", textTransform: "uppercase", fontWeight: "700" }}>🔴 Reste à payer</div>
             <div style={{ fontSize: "16px", fontWeight: "800", color: monSolde > 0 ? "#e94560" : "#4ecdc4", marginTop: "4px" }}>{fmt(monSolde)}</div>
           </div>
         </div>
-
         <div style={{ display: "flex", gap: "3px", backgroundColor: "rgba(255,255,255,0.08)", borderRadius: "14px", padding: "4px" }}>
           {[["ventes", "🛍️ Mes ventes"], ["classement", "🏆 Classement"], ["stock", "📦 Stock"]].map(([key, label]) => (
             <button key={key} onClick={() => setTab(key)} style={{ flex: 1, padding: "10px 4px", borderRadius: "10px", border: "none", fontSize: "11px", fontWeight: "700", cursor: "pointer", backgroundColor: tab === key ? "#e94560" : "transparent", color: tab === key ? "#fff" : "rgba(255,255,255,0.45)" }}>
@@ -175,14 +191,18 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, onAddVente
       </div>
 
       <div style={{ padding: "16px 16px 100px" }}>
-
         {tab === "ventes" && (
           mesVentes.length === 0
             ? <div style={{ textAlign: "center", padding: "60px 0", color: "#94a3b8" }}><div style={{ fontSize: "52px" }}>🛍️</div><div style={{ fontWeight: "700", marginTop: "12px" }}>Aucune vente</div><div style={{ fontSize: "13px", marginTop: "4px" }}>Appuie sur + pour en ajouter une</div></div>
             : mesVentes.map((v: any) => (
               <div key={v.id} style={S.card}>
-                <div style={{ fontWeight: "700", fontSize: "16px", color: "#1a1a2e" }}>{v.article}</div>
-                <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "2px" }}>{v.date}</div>
+                <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+                  <ArticlePhoto url={v.photoUrl} size={52} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: "700", fontSize: "16px", color: "#1a1a2e" }}>{v.article}</div>
+                    <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "2px" }}>{v.date}</div>
+                  </div>
+                </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "12px" }}>
                   <MiniStat label="Vendu" value={fmt(v.prixVente)} color="#4ecdc4" />
                   <MiniStat label="Ma commission" value={fmt(v.commissionMontant)} color="#e94560" />
@@ -217,8 +237,9 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, onAddVente
             ? <div style={{ textAlign: "center", padding: "60px 0", color: "#94a3b8" }}><div style={{ fontSize: "52px" }}>📦</div><div style={{ fontWeight: "700", marginTop: "12px" }}>Stock vide</div></div>
             : stock.map((s: any) => (
               <div key={s.id} style={{ ...S.card, opacity: s.quantite === 0 ? 0.4 : 1 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div>
+                <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+                  <ArticlePhoto url={s.photoUrl} size={56} />
+                  <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: "700", fontSize: "15px", color: "#1a1a2e" }}>{s.nom}</div>
                     <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "2px" }}>{s.categorie}</div>
                   </div>
@@ -248,6 +269,18 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, onAddVente
                       options={stockDispo.map((s: any) => ({ value: String(s.id), label: `${s.nom} (×${s.quantite})` }))} />
                 }
               </Field>
+
+              {/* Aperçu photo de l'article sélectionné */}
+              {articleSelectionne && articleSelectionne.photoUrl && (
+                <div style={{ display: "flex", alignItems: "center", gap: "12px", backgroundColor: "#f8fafc", borderRadius: "12px", padding: "10px" }}>
+                  <ArticlePhoto url={articleSelectionne.photoUrl} size={64} />
+                  <div>
+                    <div style={{ fontWeight: "700", color: "#1a1a2e" }}>{articleSelectionne.nom}</div>
+                    <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "2px" }}>{articleSelectionne.categorie}</div>
+                  </div>
+                </div>
+              )}
+
               <Field label="Prix de vente (€)">
                 <TInput type="number" value={venteForm.prixVente} onChange={(v: string) => setVenteForm({ ...venteForm, prixVente: v })} placeholder="Ex: 50" />
               </Field>
@@ -286,9 +319,8 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
   const [editStock, setEditStock] = useState<any>(null);
   const [showPaiement, setShowPaiement] = useState<any>(null);
   const [syncing, setSyncing] = useState(false);
-  // Par défaut : vente perso (Moi)
   const [venteForm, setVenteForm] = useState({ vendeur: VENTE_PERSO_KEY, stockId: "", prixVente: "", note: "" });
-  const [stockForm, setStockForm] = useState({ nom: "", categorie: "Vêtements", prixAchat: "", quantite: "1" });
+  const [stockForm, setStockForm] = useState({ nom: "", categorie: "Vêtements", prixAchat: "", quantite: "1", photoUrl: "" });
   const [paiementForm, setPaiementForm] = useState({ montant: "", note: "" });
   const [showAjustement, setShowAjustement] = useState<any>(null);
   const [ajustementForm, setAjustementForm] = useState({ montant: "", note: "", type: "prime" });
@@ -298,6 +330,7 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
 
   const stockDispo = stock.filter((s: any) => s.quantite > 0);
   const ventesMonth = useMemo(() => ventes.filter((v: any) => v.mois === moisActuel()), [ventes]);
+
   const stats = useMemo(() => ({
     ca: ventes.reduce((s: number, v: any) => s + v.prixVente, 0),
     caMonth: ventesMonth.reduce((s: number, v: any) => s + v.prixVente, 0),
@@ -308,6 +341,34 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
     nbVentes: ventes.length, nbVentesMonth: ventesMonth.length,
   }), [ventes, ventesMonth]);
 
+  // Données graphique CA par mois (6 derniers mois)
+  const dataCAMois = useMemo(() => {
+    const map: Record<string, { ca: number; benef: number }> = {};
+    ventes.forEach((v: any) => {
+      if (!map[v.mois]) map[v.mois] = { ca: 0, benef: 0 };
+      map[v.mois].ca += v.prixVente;
+      map[v.mois].benef += v.partEntreprise;
+    });
+    return Object.entries(map)
+      .sort((a, b) => {
+        const [ma, ya] = a[0].split("-").map(Number);
+        const [mb, yb] = b[0].split("-").map(Number);
+        return ya !== yb ? ya - yb : ma - mb;
+      })
+      .slice(-6)
+      .map(([mois, vals]) => ({ mois: getMoisLabel(mois), ...vals }));
+  }, [ventes]);
+
+  // Données graphique top articles
+  const dataTopArticles = useMemo(() => {
+    const map: Record<string, number> = {};
+    ventes.forEach((v: any) => { map[v.article] = (map[v.article] || 0) + 1; });
+    return Object.entries(map)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([nom, nb]) => ({ nom: nom.length > 14 ? nom.slice(0, 14) + "…" : nom, nb }));
+  }, [ventes]);
+
   const statsVendeurs = useMemo(() => vendeurs.map((v: any) => {
     const vv = ventes.filter((x: any) => x.vendeur === v.nom);
     const vvM = ventesMonth.filter((x: any) => x.vendeur === v.nom);
@@ -316,11 +377,13 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
     return { ...v, nb: vv.length, nbMonth: vvM.length, ca: vv.reduce((s: number, x: any) => s + x.prixVente, 0), commissionTotal: totalDu, commissionMonth: vvM.reduce((s: number, x: any) => s + x.commissionMontant, 0), totalPaye, solde: totalDu - totalPaye };
   }), [ventes, ventesMonth, paiements, vendeurs]);
 
+  const articleVenteSelectionne = stock.find((s: any) => s.id === +venteForm.stockId);
+
   const addStock = async () => {
     if (!stockForm.nom || !stockForm.prixAchat) return;
     const newStock = [...stock, { id: Date.now(), ...stockForm, prixAchat: +stockForm.prixAchat, quantite: +stockForm.quantite, mois: moisActuel() }];
     setStock(newStock); await saveSync("stock", newStock);
-    setStockForm({ nom: "", categorie: "Vêtements", prixAchat: "", quantite: "1" });
+    setStockForm({ nom: "", categorie: "Vêtements", prixAchat: "", quantite: "1", photoUrl: "" });
     setShowStock(false); showToast("Article ajouté ✓");
   };
 
@@ -341,45 +404,29 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
     if (!venteForm.stockId || !venteForm.prixVente) return;
     const article = stock.find((s: any) => s.id === +venteForm.stockId);
     if (!article) return;
-
     const isVentePerso = venteForm.vendeur === VENTE_PERSO_KEY;
     const vendeur = isVentePerso ? null : vendeurs.find((v: any) => v.nom === venteForm.vendeur);
     if (!isVentePerso && !vendeur) return;
-
     const prixVente = +venteForm.prixVente;
     const benefBrut = prixVente - article.prixAchat;
-    // Vente perso : 0% commission, 100% bénéfice entreprise
     const commissionMontant = isVentePerso ? 0 : benefBrut * (vendeur!.commission / 100);
     const partEntreprise = benefBrut - commissionMontant;
-
     const vente = {
-      id: Date.now(),
-      date: fmtDate(),
-      mois: moisActuel(),
+      id: Date.now(), date: fmtDate(), mois: moisActuel(),
       vendeur: isVentePerso ? "Moi" : vendeur!.nom,
       commission: isVentePerso ? 0 : vendeur!.commission,
       ventePerso: isVentePerso,
       article: article.nom,
-      prixAchat: article.prixAchat,
-      prixVente,
-      benefBrut,
-      commissionMontant,
-      partEntreprise,
-      note: venteForm.note,
+      photoUrl: article.photoUrl || "",
+      prixAchat: article.prixAchat, prixVente, benefBrut, commissionMontant, partEntreprise, note: venteForm.note,
     };
-
     const newVentes = [vente, ...ventes];
     const newStock = stock.map((s: any) => s.id === article.id ? { ...s, quantite: s.quantite - 1 } : s);
     setVentes(newVentes); setStock(newStock);
     await Promise.all([saveSync("ventes", newVentes), saveSync("stock", newStock)]);
     setVenteForm({ vendeur: VENTE_PERSO_KEY, stockId: "", prixVente: "", note: "" });
     setShowVente(false);
-
-    if (isVentePerso) {
-      showToast(`Vente perso enregistrée ! Bénéfice : ${fmt(partEntreprise)} ✓`);
-    } else {
-      showToast(`Bénéfice entreprise : ${fmt(partEntreprise)} ✓`);
-    }
+    showToast(isVentePerso ? `Vente perso ! Bénéfice : ${fmt(partEntreprise)} ✓` : `Bénéfice entreprise : ${fmt(partEntreprise)} ✓`);
   };
 
   const deleteVente = async (id: number) => {
@@ -411,6 +458,20 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
   };
 
   const saveVendeurs = async () => { await saveSync("vendeurs", vendeurs); setShowSettings(false); showToast("Commissions sauvegardées ✓"); };
+
+  const CustomTooltipCA = ({ active, payload, label }: any) => {
+    if (active && payload && payload.length) {
+      return (
+        <div style={{ backgroundColor: "#1a1a2e", borderRadius: "10px", padding: "10px 14px", fontSize: "12px", color: "#fff" }}>
+          <div style={{ fontWeight: "700", marginBottom: "4px" }}>{label}</div>
+          {payload.map((p: any) => (
+            <div key={p.name} style={{ color: p.color }}>{p.name === "ca" ? "CA" : "Bénéfice"} : {fmt(p.value)}</div>
+          ))}
+        </div>
+      );
+    }
+    return null;
+  };
 
   return (
     <div style={{ minHeight: "100vh", backgroundColor: "#f1f5f9", fontFamily: "system-ui, -apple-system, sans-serif", maxWidth: "480px", margin: "0 auto" }}>
@@ -446,6 +507,8 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
       </div>
 
       <div style={{ padding: "16px 16px 100px" }}>
+
+        {/* ── DASHBOARD ── */}
         {tab === "dashboard" && (
           <div>
             <div style={{ fontSize: "13px", fontWeight: "800", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "12px" }}>📅 Ce mois — {moisLabel()}</div>
@@ -461,6 +524,43 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
                 ))}
               </div>
             </div>
+
+            {/* Graphique CA par mois */}
+            {dataCAMois.length > 1 && (
+              <div style={{ ...S.card, marginTop: "20px" }}>
+                <div style={{ fontSize: "13px", fontWeight: "800", color: "#1a1a2e", marginBottom: "16px" }}>📈 CA & Bénéfice par mois</div>
+                <ResponsiveContainer width="100%" height={180}>
+                  <LineChart data={dataCAMois} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                    <XAxis dataKey="mois" tick={{ fontSize: 11, fill: "#94a3b8" }} />
+                    <YAxis tick={{ fontSize: 10, fill: "#94a3b8" }} />
+                    <Tooltip content={<CustomTooltipCA />} />
+                    <Line type="monotone" dataKey="ca" stroke="#4ecdc4" strokeWidth={2.5} dot={{ r: 4, fill: "#4ecdc4" }} name="ca" />
+                    <Line type="monotone" dataKey="benef" stroke="#e94560" strokeWidth={2.5} dot={{ r: 4, fill: "#e94560" }} name="benef" />
+                  </LineChart>
+                </ResponsiveContainer>
+                <div style={{ display: "flex", gap: "16px", justifyContent: "center", marginTop: "8px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "#64748b" }}><div style={{ width: 12, height: 3, backgroundColor: "#4ecdc4", borderRadius: 2 }} />CA</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "#64748b" }}><div style={{ width: 12, height: 3, backgroundColor: "#e94560", borderRadius: 2 }} />Bénéfice</div>
+                </div>
+              </div>
+            )}
+
+            {/* Graphique top articles */}
+            {dataTopArticles.length > 0 && (
+              <div style={{ ...S.card, marginTop: "12px" }}>
+                <div style={{ fontSize: "13px", fontWeight: "800", color: "#1a1a2e", marginBottom: "16px" }}>🏆 Top articles les plus vendus</div>
+                <ResponsiveContainer width="100%" height={dataTopArticles.length * 38 + 20}>
+                  <BarChart data={dataTopArticles} layout="vertical" margin={{ top: 0, right: 30, left: 0, bottom: 0 }}>
+                    <XAxis type="number" tick={{ fontSize: 10, fill: "#94a3b8" }} allowDecimals={false} />
+                    <YAxis type="category" dataKey="nom" tick={{ fontSize: 11, fill: "#64748b" }} width={90} />
+                    <Tooltip formatter={(v: any) => [`${v} vente(s)`, ""]} contentStyle={{ borderRadius: "10px", fontSize: "12px" }} />
+                    <Bar dataKey="nb" fill="#a29bfe" radius={[0, 6, 6, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+
             <div style={{ fontSize: "13px", fontWeight: "800", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "12px", marginTop: "20px" }}>👥 Soldes vendeurs</div>
             {statsVendeurs.filter((v: any) => v.solde > 0).map((v: any) => (
               <div key={v.nom} style={S.card}>
@@ -472,6 +572,7 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
               </div>
             ))}
             {statsVendeurs.filter((v: any) => v.solde > 0).length === 0 && <div style={{ textAlign: "center", color: "#94a3b8", padding: "20px 0" }}>Tous les vendeurs sont soldés ✅</div>}
+
             <div style={{ fontSize: "13px", fontWeight: "800", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "12px", marginTop: "20px" }}>📈 Tous les temps</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
               {[["CA Total", fmt(stats.ca), "#4ecdc4"], ["Bénéfice", fmt(stats.benef), "#e94560"], ["Commissions dues", fmt(stats.commissions), "#f7b731"], ["Nb ventes", stats.nbVentes, "#a29bfe"]].map(([l, v, c]: any) => (
@@ -484,20 +585,24 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
           </div>
         )}
 
+        {/* ── VENTES ── */}
         {tab === "ventes" && (
           ventes.length === 0
             ? <div style={{ textAlign: "center", padding: "60px 0", color: "#94a3b8" }}><div style={{ fontSize: "52px" }}>🛍️</div><div style={{ fontWeight: "700", marginTop: "12px" }}>Aucune vente</div></div>
             : ventes.map((v: any) => (
               <div key={v.id} style={S.card}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                  <div>
-                    <div style={{ fontWeight: "700", fontSize: "16px", color: "#1a1a2e" }}>{v.article}</div>
-                    <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "2px" }}>
-                      {v.date} ·{" "}
-                      {v.ventePerso
-                        ? <span style={{ color: "#a29bfe", fontWeight: "700" }}>👤 Moi (perso)</span>
-                        : `${v.vendeur} (${v.commission}%)`
-                      }
+                  <div style={{ display: "flex", gap: "10px", alignItems: "center", flex: 1 }}>
+                    <ArticlePhoto url={v.photoUrl} size={48} />
+                    <div>
+                      <div style={{ fontWeight: "700", fontSize: "15px", color: "#1a1a2e" }}>{v.article}</div>
+                      <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "2px" }}>
+                        {v.date} ·{" "}
+                        {v.ventePerso
+                          ? <span style={{ color: "#a29bfe", fontWeight: "700" }}>👤 Moi (perso)</span>
+                          : `${v.vendeur} (${v.commission}%)`
+                        }
+                      </div>
                     </div>
                   </div>
                   <button onClick={() => deleteVente(v.id)} style={{ background: "none", border: "none", color: "#cbd5e1", fontSize: "18px", cursor: "pointer" }}>✕</button>
@@ -512,13 +617,18 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
             ))
         )}
 
+        {/* ── STOCK ── */}
         {tab === "stock" && (
           stock.length === 0
             ? <div style={{ textAlign: "center", padding: "60px 0", color: "#94a3b8" }}><div style={{ fontSize: "52px" }}>📦</div><div style={{ fontWeight: "700", marginTop: "12px" }}>Stock vide</div></div>
             : stock.map((s: any) => (
               <div key={s.id} style={{ ...S.card, opacity: s.quantite === 0 ? 0.5 : 1 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div><div style={{ fontWeight: "700", fontSize: "16px", color: "#1a1a2e" }}>{s.nom}</div><div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "2px" }}>{s.categorie} · Acheté {fmt(s.prixAchat)}</div></div>
+                <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+                  <ArticlePhoto url={s.photoUrl} size={60} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: "700", fontSize: "16px", color: "#1a1a2e" }}>{s.nom}</div>
+                    <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "2px" }}>{s.categorie} · Acheté {fmt(s.prixAchat)}</div>
+                  </div>
                   <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
                     <div style={{ fontSize: "28px", fontWeight: "800", color: s.quantite === 0 ? "#ef4444" : "#22c55e" }}>×{s.quantite}</div>
                     <button onClick={() => setEditStock({ ...s })} style={{ backgroundColor: "#f1f5f9", border: "none", borderRadius: "10px", padding: "8px 12px", fontSize: "14px", cursor: "pointer", color: "#64748b" }}>✏️</button>
@@ -528,6 +638,7 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
             ))
         )}
 
+        {/* ── VENDEURS ── */}
         {tab === "vendeurs" && statsVendeurs.map((v: any) => (
           <div key={v.nom} style={S.card}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
@@ -547,7 +658,7 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
               </div>
               <div style={{ display: "flex", gap: "8px" }}>
                 {v.solde > 0 && <button onClick={() => { setShowPaiement(v.nom); setPaiementForm({ montant: v.solde.toFixed(2), note: "" }); }} style={{ backgroundColor: "#e94560", color: "#fff", border: "none", borderRadius: "12px", padding: "10px 16px", fontWeight: "700", fontSize: "14px", cursor: "pointer" }}>💸 Payer</button>}
-                <button onClick={() => { setShowAjustement(v.nom); setAjustementForm({ montant: "", note: "", type: "prime" }); }} style={{ backgroundColor: "#a29bfe", color: "#fff", border: "none", borderRadius: "12px", padding: "10px 16px", fontWeight: "700", fontSize: "14px", cursor: "pointer" }}>✏️ Ajuster</button>
+                <button onClick={() => { setShowAjustement(v.nom); setAjustementForm({ montant: "", note: "", type: "prime" }); }} style={{ backgroundColor: "#a29bfe", color: "#fff", border: "none", borderRadius: "12px", padding: "10px 16px", fontWeight: "700", fontSize: "14px", cursor: "pointer" }}>✏️</button>
               </div>
             </div>
             {paiements.filter((p: any) => p.vendeur === v.nom).length > 0 && (
@@ -565,6 +676,7 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
         ))}
       </div>
 
+      {/* FAB */}
       <div style={{ position: "fixed", bottom: "32px", right: "20px", zIndex: 40 }}>
         {tab === "stock" && <button onClick={() => setShowStock(true)} style={{ width: "58px", height: "58px", borderRadius: "50%", backgroundColor: "#4ecdc4", border: "none", fontSize: "30px", color: "#fff", cursor: "pointer", boxShadow: "0 6px 24px rgba(78,205,196,0.5)", fontWeight: "700", display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>}
         {tab === "ventes" && <button onClick={() => setShowVente(true)} style={{ width: "58px", height: "58px", borderRadius: "50%", backgroundColor: "#e94560", border: "none", fontSize: "30px", color: "#fff", cursor: "pointer", boxShadow: "0 6px 24px rgba(233,69,96,0.5)", fontWeight: "700", display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>}
@@ -579,27 +691,16 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
               <button onClick={() => setShowVente(false)} style={{ background: "none", border: "none", fontSize: "22px", color: "#94a3b8", cursor: "pointer" }}>✕</button>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-
-              {/* Sélecteur vendeur avec option "Moi" en tête */}
               <Field label="Vendu par">
-                <Select
-                  value={venteForm.vendeur}
-                  onChange={(v: string) => setVenteForm({ ...venteForm, vendeur: v })}
-                  options={[
-                    { value: VENTE_PERSO_KEY, label: "👤 Moi (vente perso — 0% commission)" },
-                    ...vendeurs.map((v: any) => ({ value: v.nom, label: `${v.nom} (${v.commission}%)` }))
-                  ]}
-                />
+                <Select value={venteForm.vendeur} onChange={(v: string) => setVenteForm({ ...venteForm, vendeur: v })}
+                  options={[{ value: VENTE_PERSO_KEY, label: "👤 Moi (vente perso — 0% commission)" }, ...vendeurs.map((v: any) => ({ value: v.nom, label: `${v.nom} (${v.commission}%)` }))]} />
               </Field>
-
-              {/* Badge visuel si vente perso */}
               {venteForm.vendeur === VENTE_PERSO_KEY && (
                 <div style={{ backgroundColor: "#f5f3ff", borderRadius: "12px", padding: "10px 14px", border: "2px solid #ddd6fe", display: "flex", alignItems: "center", gap: "8px" }}>
                   <span style={{ fontSize: "16px" }}>👤</span>
                   <span style={{ fontSize: "13px", fontWeight: "700", color: "#7c3aed" }}>Vente perso · 100% bénéfice entreprise</span>
                 </div>
               )}
-
               <Field label="Article vendu">
                 {stockDispo.length === 0
                   ? <div style={{ backgroundColor: "#fef2f2", color: "#ef4444", padding: "14px", borderRadius: "12px", fontSize: "13px", fontWeight: "600", textAlign: "center" }}>⚠️ Stock vide</div>
@@ -607,12 +708,17 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
                       options={stockDispo.map((s: any) => ({ value: String(s.id), label: `${s.nom} — achat ${fmt(s.prixAchat)} (×${s.quantite})` }))} />
                 }
               </Field>
-
-              <Field label="Prix de vente (€)">
-                <TInput type="number" value={venteForm.prixVente} onChange={(v: string) => setVenteForm({ ...venteForm, prixVente: v })} placeholder="Ex: 50" />
-              </Field>
-
-              {/* Aperçu de la répartition */}
+              {/* Aperçu photo article sélectionné */}
+              {articleVenteSelectionne && articleVenteSelectionne.photoUrl && (
+                <div style={{ display: "flex", alignItems: "center", gap: "12px", backgroundColor: "#f8fafc", borderRadius: "12px", padding: "10px" }}>
+                  <ArticlePhoto url={articleVenteSelectionne.photoUrl} size={64} />
+                  <div>
+                    <div style={{ fontWeight: "700", color: "#1a1a2e" }}>{articleVenteSelectionne.nom}</div>
+                    <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "2px" }}>{articleVenteSelectionne.categorie}</div>
+                  </div>
+                </div>
+              )}
+              <Field label="Prix de vente (€)"><TInput type="number" value={venteForm.prixVente} onChange={(v: string) => setVenteForm({ ...venteForm, prixVente: v })} placeholder="Ex: 50" /></Field>
               {venteForm.stockId && venteForm.prixVente && (() => {
                 const article = stock.find((s: any) => s.id === +venteForm.stockId);
                 if (!article) return null;
@@ -631,19 +737,14 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
                   </div>
                 );
               })()}
-
-              <Field label="Note (optionnel)">
-                <TInput value={venteForm.note} onChange={(v: string) => setVenteForm({ ...venteForm, note: v })} placeholder="Ex: payé par virement" />
-              </Field>
-
-              <button onClick={addVente} disabled={!venteForm.stockId || !venteForm.prixVente} style={S.btn("#e94560", !venteForm.stockId || !venteForm.prixVente)}>
-                Enregistrer ✓
-              </button>
+              <Field label="Note (optionnel)"><TInput value={venteForm.note} onChange={(v: string) => setVenteForm({ ...venteForm, note: v })} placeholder="Ex: payé par virement" /></Field>
+              <button onClick={addVente} disabled={!venteForm.stockId || !venteForm.prixVente} style={S.btn("#e94560", !venteForm.stockId || !venteForm.prixVente)}>Enregistrer ✓</button>
             </div>
           </div>
         </div>
       )}
 
+      {/* ── MODAL AJOUT STOCK ── */}
       {showStock && (
         <div style={S.overlay} onClick={(e: any) => e.target === e.currentTarget && setShowStock(false)}>
           <div style={S.modal}>
@@ -658,12 +759,22 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
                 <Field label="Prix d'achat (€)"><TInput type="number" value={stockForm.prixAchat} onChange={(v: string) => setStockForm({ ...stockForm, prixAchat: v })} placeholder="Ex: 12,56" /></Field>
                 <Field label="Quantité"><TInput type="number" value={stockForm.quantite} onChange={(v: string) => setStockForm({ ...stockForm, quantite: v })} placeholder="Ex: 20" /></Field>
               </div>
+              <Field label="🖼️ URL Photo (optionnel)">
+                <TInput value={stockForm.photoUrl} onChange={(v: string) => setStockForm({ ...stockForm, photoUrl: v })} placeholder="https://..." />
+              </Field>
+              {stockForm.photoUrl && (
+                <div style={{ borderRadius: "12px", overflow: "hidden", border: "2px solid #e2e8f0" }}>
+                  <img src={stockForm.photoUrl} alt="preview" style={{ width: "100%", maxHeight: "180px", objectFit: "cover", display: "block" }}
+                    onError={(e: any) => { e.target.style.display = "none"; }} />
+                </div>
+              )}
               <button onClick={addStock} disabled={!stockForm.nom || !stockForm.prixAchat} style={S.btn("#4ecdc4", !stockForm.nom || !stockForm.prixAchat)}>Ajouter ✓</button>
             </div>
           </div>
         </div>
       )}
 
+      {/* ── MODAL EDIT STOCK ── */}
       {editStock && (
         <div style={S.overlay} onClick={(e: any) => e.target === e.currentTarget && setEditStock(null)}>
           <div style={S.modal}>
@@ -678,6 +789,15 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
                 <Field label="Prix d'achat (€)"><TInput type="number" value={editStock.prixAchat} onChange={(v: string) => setEditStock({ ...editStock, prixAchat: v })} placeholder="Prix" /></Field>
                 <Field label="Quantité"><TInput type="number" value={editStock.quantite} onChange={(v: string) => setEditStock({ ...editStock, quantite: v })} placeholder="Qté" /></Field>
               </div>
+              <Field label="🖼️ URL Photo (optionnel)">
+                <TInput value={editStock.photoUrl || ""} onChange={(v: string) => setEditStock({ ...editStock, photoUrl: v })} placeholder="https://..." />
+              </Field>
+              {editStock.photoUrl && (
+                <div style={{ borderRadius: "12px", overflow: "hidden", border: "2px solid #e2e8f0" }}>
+                  <img src={editStock.photoUrl} alt="preview" style={{ width: "100%", maxHeight: "180px", objectFit: "cover", display: "block" }}
+                    onError={(e: any) => { e.target.style.display = "none"; }} />
+                </div>
+              )}
               <button onClick={saveEditStock} style={S.btn("#4ecdc4", false)}>Sauvegarder ✓</button>
               <button onClick={() => deleteStock(editStock.id)} style={S.btn("#ef4444", false)}>🗑️ Supprimer</button>
             </div>
@@ -685,6 +805,7 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
         </div>
       )}
 
+      {/* ── MODAL PAIEMENT ── */}
       {showPaiement && (
         <div style={S.overlay} onClick={(e: any) => e.target === e.currentTarget && setShowPaiement(null)}>
           <div style={S.modal}>
@@ -702,6 +823,7 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
         </div>
       )}
 
+      {/* ── MODAL AJUSTEMENT ── */}
       {showAjustement && (
         <div style={S.overlay} onClick={(e: any) => e.target === e.currentTarget && setShowAjustement(null)}>
           <div style={S.modal}>
@@ -714,12 +836,8 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
                 <Select value={ajustementForm.type} onChange={(v: string) => setAjustementForm({ ...ajustementForm, type: v })}
                   options={[{ value: "prime", label: "➕ Prime (augmente ce qu'on lui doit)" }, { value: "dette", label: "📋 Dette initiale (il nous devait déjà)" }, { value: "deduction", label: "➖ Déduction (on lui enlève)" }]} />
               </Field>
-              <Field label="Montant (€)">
-                <TInput type="number" value={ajustementForm.montant} onChange={(v: string) => setAjustementForm({ ...ajustementForm, montant: v })} placeholder="Ex: 15" />
-              </Field>
-              <Field label="Note (optionnel)">
-                <TInput value={ajustementForm.note} onChange={(v: string) => setAjustementForm({ ...ajustementForm, note: v })} placeholder="Ex: prime de bienvenue" />
-              </Field>
+              <Field label="Montant (€)"><TInput type="number" value={ajustementForm.montant} onChange={(v: string) => setAjustementForm({ ...ajustementForm, montant: v })} placeholder="Ex: 15" /></Field>
+              <Field label="Note (optionnel)"><TInput value={ajustementForm.note} onChange={(v: string) => setAjustementForm({ ...ajustementForm, note: v })} placeholder="Ex: prime de bienvenue" /></Field>
               {ajustementForm.montant && (
                 <div style={{ backgroundColor: "#f0f4ff", borderRadius: "14px", padding: "14px", textAlign: "center", border: "2px solid #c7d2fe" }}>
                   <div style={{ fontSize: "11px", color: "#6366f1", fontWeight: "700", textTransform: "uppercase", marginBottom: "6px" }}>Impact sur le solde</div>
@@ -734,6 +852,7 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
         </div>
       )}
 
+      {/* ── MODAL SETTINGS ── */}
       {showSettings && (
         <div style={S.overlay} onClick={(e: any) => e.target === e.currentTarget && setShowSettings(false)}>
           <div style={S.modal}>
@@ -794,15 +913,11 @@ export default function App() {
     </div>
   );
 
-  if (IS_ADMIN) {
-    return <AppAdmin vendeurs={vendeurs} setVendeurs={setVendeurs} stock={stock} setStock={setStock} ventes={ventes} setVentes={setVentes} paiements={paiements} setPaiements={setPaiements} save={save} />;
-  }
-
+  if (IS_ADMIN) return <AppAdmin vendeurs={vendeurs} setVendeurs={setVendeurs} stock={stock} setStock={setStock} ventes={ventes} setVentes={setVentes} paiements={paiements} setPaiements={setPaiements} save={save} />;
   if (VENDEUR_PARAM) {
     const vendeurTrouve = vendeurs.find((v: any) => v.nom.toLowerCase() === VENDEUR_PARAM);
     if (!vendeurTrouve) return <PageInconnue />;
     return <AppVendeur nomVendeur={vendeurTrouve.nom} vendeurs={vendeurs} stock={stock} ventes={ventes} paiements={paiements} onAddVente={handleAddVente} />;
   }
-
   return <PageInconnue />;
 }
