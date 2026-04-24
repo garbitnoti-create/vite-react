@@ -27,6 +27,7 @@ const VENDEURS_INIT = [
 ];
 
 const CATEGORIES = ["Vêtements", "Chaussures", "Sacs", "Accessoires", "Sport", "Autre"];
+const PRIORITES = ["Normale", "Haute", "Urgente"];
 const fmt = (n: number) => Number(n || 0).toFixed(2).replace(".", ",") + " €";
 const fmtDate = () => new Date().toLocaleDateString("fr-FR");
 const moisActuel = () => { const d = new Date(); return `${d.getMonth()}-${d.getFullYear()}`; };
@@ -83,7 +84,6 @@ function MiniStat({ label, value, color }: any) {
   );
 }
 
-// Vignette photo article
 function ArticlePhoto({ url, size = 48 }: { url?: string; size?: number }) {
   if (!url) return (
     <div style={{ width: size, height: size, borderRadius: "10px", backgroundColor: "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center", fontSize: size * 0.4, flexShrink: 0 }}>
@@ -100,7 +100,6 @@ async function fbSave(key: string, data: any) {
   await setDoc(doc(db, "vinted", key), { data: JSON.stringify(data) });
 }
 
-// ─── PAGE NON RECONNUE ─────────────────────────────────────────────────────────
 function PageInconnue() {
   return (
     <div style={{ minHeight: "100vh", backgroundColor: "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: "16px", padding: "24px" }}>
@@ -112,7 +111,7 @@ function PageInconnue() {
 }
 
 // ─── APP VENDEUR ───────────────────────────────────────────────────────────────
-function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, onAddVente }: any) {
+function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, taches, onAddVente }: any) {
   const [tab, setTab] = useState("ventes");
   const [showVente, setShowVente] = useState(false);
   const [venteForm, setVenteForm] = useState({ stockId: "", prixVente: "", note: "" });
@@ -122,6 +121,7 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, onAddVente
 
   const stockDispo = stock.filter((s: any) => s.quantite > 0);
   const mesVentes = ventes.filter((v: any) => v.vendeur.toLowerCase() === nomVendeur.toLowerCase());
+  const mesTaches = taches.filter((t: any) => t.assigneA.toLowerCase() === nomVendeur.toLowerCase());
   const monSolde = (() => {
     const vendeur = vendeurs.find((v: any) => v.nom.toLowerCase() === nomVendeur.toLowerCase());
     if (!vendeur) return 0;
@@ -156,6 +156,10 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, onAddVente
   };
 
   const nomAffiche = nomVendeur.charAt(0).toUpperCase() + nomVendeur.slice(1);
+  const nbTachesEnCours = mesTaches.filter((t: any) => t.statut !== "Fait").length;
+
+  const PRIORITE_COLOR: any = { "Haute": "#f7b731", "Urgente": "#e94560", "Normale": "#4ecdc4" };
+  const STATUT_COLOR: any = { "À faire": "#94a3b8", "En cours": "#a29bfe", "Fait": "#22c55e" };
 
   return (
     <div style={{ minHeight: "100vh", backgroundColor: "#f1f5f9", fontFamily: "system-ui, -apple-system, sans-serif", maxWidth: "480px", margin: "0 auto" }}>
@@ -181,8 +185,8 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, onAddVente
           </div>
         </div>
         <div style={{ display: "flex", gap: "3px", backgroundColor: "rgba(255,255,255,0.08)", borderRadius: "14px", padding: "4px" }}>
-          {[["ventes", "🛍️ Mes ventes"], ["classement", "🏆 Classement"], ["stock", "📦 Stock"]].map(([key, label]) => (
-            <button key={key} onClick={() => setTab(key)} style={{ flex: 1, padding: "10px 4px", borderRadius: "10px", border: "none", fontSize: "11px", fontWeight: "700", cursor: "pointer", backgroundColor: tab === key ? "#e94560" : "transparent", color: tab === key ? "#fff" : "rgba(255,255,255,0.45)" }}>
+          {[["ventes", "🛍️ Mes ventes"], ["taches", nbTachesEnCours > 0 ? `🗒️ Tâches (${nbTachesEnCours})` : "🗒️ Tâches"], ["classement", "🏆 Top"], ["stock", "📦 Stock"]].map(([key, label]) => (
+            <button key={key} onClick={() => setTab(key)} style={{ flex: 1, padding: "10px 4px", borderRadius: "10px", border: "none", fontSize: "10px", fontWeight: "700", cursor: "pointer", backgroundColor: tab === key ? "#e94560" : "transparent", color: tab === key ? "#fff" : "rgba(255,255,255,0.45)" }}>
               {label}
             </button>
           ))}
@@ -208,6 +212,27 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, onAddVente
                   <MiniStat label="Ma commission" value={fmt(v.commissionMontant)} color="#e94560" />
                 </div>
                 {v.note && <div style={{ marginTop: "8px", fontSize: "12px", color: "#94a3b8", fontStyle: "italic" }}>📝 {v.note}</div>}
+              </div>
+            ))
+        )}
+
+        {/* ── TÂCHES VENDEUR ── */}
+        {tab === "taches" && (
+          mesTaches.length === 0
+            ? <div style={{ textAlign: "center", padding: "60px 0", color: "#94a3b8" }}><div style={{ fontSize: "52px" }}>🗒️</div><div style={{ fontWeight: "700", marginTop: "12px" }}>Aucune tâche</div><div style={{ fontSize: "13px", marginTop: "4px" }}>Pas de tâche assignée pour l'instant</div></div>
+            : mesTaches.map((t: any) => (
+              <div key={t.id} style={{ ...S.card, opacity: t.statut === "Fait" ? 0.55 : 1, borderLeft: `4px solid ${PRIORITE_COLOR[t.priorite] || "#94a3b8"}` }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: "700", fontSize: "15px", color: "#1a1a2e", textDecoration: t.statut === "Fait" ? "line-through" : "none" }}>{t.titre}</div>
+                    {t.description && <div style={{ fontSize: "13px", color: "#64748b", marginTop: "4px" }}>{t.description}</div>}
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "6px", marginLeft: "10px" }}>
+                    <span style={{ backgroundColor: PRIORITE_COLOR[t.priorite] + "22", color: PRIORITE_COLOR[t.priorite], fontSize: "10px", fontWeight: "700", padding: "3px 10px", borderRadius: "100px", whiteSpace: "nowrap" }}>{t.priorite}</span>
+                    <span style={{ backgroundColor: STATUT_COLOR[t.statut] + "22", color: STATUT_COLOR[t.statut], fontSize: "10px", fontWeight: "700", padding: "3px 10px", borderRadius: "100px", whiteSpace: "nowrap" }}>{t.statut}</span>
+                  </div>
+                </div>
+                {t.echeance && <div style={{ marginTop: "8px", fontSize: "11px", color: "#94a3b8" }}>📅 Échéance : {t.echeance}</div>}
               </div>
             ))
         )}
@@ -269,8 +294,6 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, onAddVente
                       options={stockDispo.map((s: any) => ({ value: String(s.id), label: `${s.nom} (×${s.quantite})` }))} />
                 }
               </Field>
-
-              {/* Aperçu photo de l'article sélectionné */}
               {articleSelectionne && articleSelectionne.photoUrl && (
                 <div style={{ display: "flex", alignItems: "center", gap: "12px", backgroundColor: "#f8fafc", borderRadius: "12px", padding: "10px" }}>
                   <ArticlePhoto url={articleSelectionne.photoUrl} size={64} />
@@ -280,7 +303,6 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, onAddVente
                   </div>
                 </div>
               )}
-
               <Field label="Prix de vente (€)">
                 <TInput type="number" value={venteForm.prixVente} onChange={(v: string) => setVenteForm({ ...venteForm, prixVente: v })} placeholder="Ex: 50" />
               </Field>
@@ -310,7 +332,7 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, onAddVente
 }
 
 // ─── APP ADMIN ─────────────────────────────────────────────────────────────────
-function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, paiements, setPaiements, save }: any) {
+function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, paiements, setPaiements, taches, setTaches, save }: any) {
   const [tab, setTab] = useState("dashboard");
   const [toast, setToast] = useState<any>(null);
   const [showVente, setShowVente] = useState(false);
@@ -324,6 +346,10 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
   const [paiementForm, setPaiementForm] = useState({ montant: "", note: "" });
   const [showAjustement, setShowAjustement] = useState<any>(null);
   const [ajustementForm, setAjustementForm] = useState({ montant: "", note: "", type: "prime" });
+
+  // ── État tâches ──
+  const [showTache, setShowTache] = useState(false);
+  const [tacheForm, setTacheForm] = useState({ titre: "", description: "", assigneA: "", priorite: "Normale", echeance: "" });
 
   const showToast = (msg: string, color = "#22c55e") => { setToast({ msg, color }); setTimeout(() => setToast(null), 3000); };
   const saveSync = async (key: string, data: any) => { setSyncing(true); await save(key, data); setTimeout(() => setSyncing(false), 800); };
@@ -341,7 +367,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
     nbVentes: ventes.length, nbVentesMonth: ventesMonth.length,
   }), [ventes, ventesMonth]);
 
-  // Données graphique CA par mois (6 derniers mois)
   const dataCAMois = useMemo(() => {
     const map: Record<string, { ca: number; benef: number }> = {};
     ventes.forEach((v: any) => {
@@ -359,7 +384,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
       .map(([mois, vals]) => ({ mois: getMoisLabel(mois), ...vals }));
   }, [ventes]);
 
-  // Données graphique top articles
   const dataTopArticles = useMemo(() => {
     const map: Record<string, number> = {};
     ventes.forEach((v: any) => { map[v.article] = (map[v.article] || 0) + 1; });
@@ -424,7 +448,7 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
     const newStock = stock.map((s: any) => s.id === article.id ? { ...s, quantite: s.quantite - 1 } : s);
     setVentes(newVentes); setStock(newStock);
     await Promise.all([saveSync("ventes", newVentes), saveSync("stock", newStock)]);
-    setVenteForm({ vendeur: VENTE_PERSO_KEY, stockId: "", prixVente: "", note: "" });
+    setVenteForm({ vendeur: VENTE_PERSO_KEY, stockId: "", prixVente: "" , note: "" });
     setShowVente(false);
     showToast(isVentePerso ? `Vente perso ! Bénéfice : ${fmt(partEntreprise)} ✓` : `Bénéfice entreprise : ${fmt(partEntreprise)} ✓`);
   };
@@ -457,7 +481,34 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
     showToast(`Ajustement enregistré ✓`);
   };
 
+  // ── Ajouter une tâche ──
+  const addTache = async () => {
+    if (!tacheForm.titre || !tacheForm.assigneA) return;
+    const t = { id: Date.now(), date: fmtDate(), statut: "À faire", ...tacheForm };
+    const newTaches = [t, ...taches];
+    setTaches(newTaches); await saveSync("taches", newTaches);
+    setTacheForm({ titre: "", description: "", assigneA: "", priorite: "Normale", echeance: "" });
+    setShowTache(false); showToast("Tâche ajoutée ✓");
+  };
+
+  // ── Changer le statut d'une tâche ──
+  const cycleStatut = async (id: number) => {
+    const CYCLE = ["À faire", "En cours", "Fait"];
+    const newTaches = taches.map((t: any) => t.id === id ? { ...t, statut: CYCLE[(CYCLE.indexOf(t.statut) + 1) % CYCLE.length] } : t);
+    setTaches(newTaches); await saveSync("taches", newTaches);
+  };
+
+  // ── Supprimer une tâche ──
+  const deleteTache = async (id: number) => {
+    const newTaches = taches.filter((t: any) => t.id !== id);
+    setTaches(newTaches); await saveSync("taches", newTaches);
+    showToast("Tâche supprimée", "#ef4444");
+  };
+
   const saveVendeurs = async () => { await saveSync("vendeurs", vendeurs); setShowSettings(false); showToast("Commissions sauvegardées ✓"); };
+
+  const PRIORITE_COLOR: any = { "Haute": "#f7b731", "Urgente": "#e94560", "Normale": "#4ecdc4" };
+  const STATUT_COLOR: any = { "À faire": "#94a3b8", "En cours": "#a29bfe", "Fait": "#22c55e" };
 
   const CustomTooltipCA = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
@@ -472,6 +523,8 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
     }
     return null;
   };
+
+  const nbTachesEnCours = taches.filter((t: any) => t.statut !== "Fait").length;
 
   return (
     <div style={{ minHeight: "100vh", backgroundColor: "#f1f5f9", fontFamily: "system-ui, -apple-system, sans-serif", maxWidth: "480px", margin: "0 auto" }}>
@@ -496,9 +549,10 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
             </div>
           ))}
         </div>
+        {/* Nav tabs — 5 onglets avec tâches */}
         <div style={{ display: "flex", gap: "3px", backgroundColor: "rgba(255,255,255,0.08)", borderRadius: "14px", padding: "4px" }}>
-          {[["dashboard", "📊"], ["ventes", "🛍️"], ["stock", "📦"], ["vendeurs", "👥"]].map(([key, label]) => (
-            <button key={key} onClick={() => setTab(key)} style={{ flex: 1, padding: "10px 4px", borderRadius: "10px", border: "none", fontSize: "16px", cursor: "pointer", backgroundColor: tab === key ? "#e94560" : "transparent", color: tab === key ? "#fff" : "rgba(255,255,255,0.45)" }}>
+          {[["dashboard", "📊"], ["ventes", "🛍️"], ["stock", "📦"], ["vendeurs", "👥"], ["taches", nbTachesEnCours > 0 ? `🗒️${nbTachesEnCours}` : "🗒️"]].map(([key, label]) => (
+            <button key={key} onClick={() => setTab(key)} style={{ flex: 1, padding: "10px 4px", borderRadius: "10px", border: "none", fontSize: "14px", cursor: "pointer", backgroundColor: tab === key ? "#e94560" : "transparent", color: tab === key ? "#fff" : "rgba(255,255,255,0.45)" }}>
               {label}
             </button>
           ))}
@@ -525,7 +579,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
               </div>
             </div>
 
-            {/* Graphique CA par mois */}
             {dataCAMois.length > 1 && (
               <div style={{ ...S.card, marginTop: "20px" }}>
                 <div style={{ fontSize: "13px", fontWeight: "800", color: "#1a1a2e", marginBottom: "16px" }}>📈 CA & Bénéfice par mois</div>
@@ -546,7 +599,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
               </div>
             )}
 
-            {/* Graphique top articles */}
             {dataTopArticles.length > 0 && (
               <div style={{ ...S.card, marginTop: "12px" }}>
                 <div style={{ fontSize: "13px", fontWeight: "800", color: "#1a1a2e", marginBottom: "16px" }}>🏆 Top articles les plus vendus</div>
@@ -674,12 +726,58 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
             )}
           </div>
         ))}
+
+        {/* ── TÂCHES ADMIN ── */}
+        {tab === "taches" && (
+          <div>
+            {/* Résumé par vendeur */}
+            {vendeurs.map((v: any) => {
+              const vTaches = taches.filter((t: any) => t.assigneA === v.nom);
+              if (vTaches.length === 0) return null;
+              return (
+                <div key={v.nom} style={{ marginBottom: "24px" }}>
+                  <div style={{ fontSize: "13px", fontWeight: "800", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "10px" }}>
+                    👤 {v.nom} · {vTaches.filter((t: any) => t.statut !== "Fait").length} en cours
+                  </div>
+                  {vTaches.map((t: any) => (
+                    <div key={t.id} style={{ ...S.card, opacity: t.statut === "Fait" ? 0.55 : 1, borderLeft: `4px solid ${PRIORITE_COLOR[t.priorite] || "#94a3b8"}` }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontWeight: "700", fontSize: "15px", color: "#1a1a2e", textDecoration: t.statut === "Fait" ? "line-through" : "none" }}>{t.titre}</div>
+                          {t.description && <div style={{ fontSize: "13px", color: "#64748b", marginTop: "4px" }}>{t.description}</div>}
+                          {t.echeance && <div style={{ fontSize: "11px", color: "#94a3b8", marginTop: "4px" }}>📅 {t.echeance}</div>}
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "6px", marginLeft: "10px" }}>
+                          <span style={{ backgroundColor: PRIORITE_COLOR[t.priorite] + "22", color: PRIORITE_COLOR[t.priorite], fontSize: "10px", fontWeight: "700", padding: "3px 10px", borderRadius: "100px", whiteSpace: "nowrap" }}>{t.priorite}</span>
+                          <button
+                            onClick={() => cycleStatut(t.id)}
+                            style={{ backgroundColor: STATUT_COLOR[t.statut] + "22", color: STATUT_COLOR[t.statut], fontSize: "10px", fontWeight: "700", padding: "3px 10px", borderRadius: "100px", border: "none", cursor: "pointer", whiteSpace: "nowrap" }}>
+                            {t.statut} →
+                          </button>
+                          <button onClick={() => deleteTache(t.id)} style={{ background: "none", border: "none", color: "#cbd5e1", fontSize: "16px", cursor: "pointer", padding: 0 }}>✕</button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+            {taches.length === 0 && (
+              <div style={{ textAlign: "center", padding: "60px 0", color: "#94a3b8" }}>
+                <div style={{ fontSize: "52px" }}>🗒️</div>
+                <div style={{ fontWeight: "700", marginTop: "12px" }}>Aucune tâche</div>
+                <div style={{ fontSize: "13px", marginTop: "4px" }}>Appuie sur + pour en créer une</div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* FAB */}
       <div style={{ position: "fixed", bottom: "32px", right: "20px", zIndex: 40 }}>
         {tab === "stock" && <button onClick={() => setShowStock(true)} style={{ width: "58px", height: "58px", borderRadius: "50%", backgroundColor: "#4ecdc4", border: "none", fontSize: "30px", color: "#fff", cursor: "pointer", boxShadow: "0 6px 24px rgba(78,205,196,0.5)", fontWeight: "700", display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>}
         {tab === "ventes" && <button onClick={() => setShowVente(true)} style={{ width: "58px", height: "58px", borderRadius: "50%", backgroundColor: "#e94560", border: "none", fontSize: "30px", color: "#fff", cursor: "pointer", boxShadow: "0 6px 24px rgba(233,69,96,0.5)", fontWeight: "700", display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>}
+        {tab === "taches" && <button onClick={() => setShowTache(true)} style={{ width: "58px", height: "58px", borderRadius: "50%", backgroundColor: "#a29bfe", border: "none", fontSize: "30px", color: "#fff", cursor: "pointer", boxShadow: "0 6px 24px rgba(162,155,254,0.5)", fontWeight: "700", display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>}
       </div>
 
       {/* ── MODAL NOUVELLE VENTE ── */}
@@ -708,7 +806,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
                       options={stockDispo.map((s: any) => ({ value: String(s.id), label: `${s.nom} — achat ${fmt(s.prixAchat)} (×${s.quantite})` }))} />
                 }
               </Field>
-              {/* Aperçu photo article sélectionné */}
               {articleVenteSelectionne && articleVenteSelectionne.photoUrl && (
                 <div style={{ display: "flex", alignItems: "center", gap: "12px", backgroundColor: "#f8fafc", borderRadius: "12px", padding: "10px" }}>
                   <ArticlePhoto url={articleVenteSelectionne.photoUrl} size={64} />
@@ -852,6 +949,39 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
         </div>
       )}
 
+      {/* ── MODAL NOUVELLE TÂCHE ── */}
+      {showTache && (
+        <div style={S.overlay} onClick={(e: any) => e.target === e.currentTarget && setShowTache(false)}>
+          <div style={S.modal}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
+              <div style={{ fontSize: "18px", fontWeight: "800", color: "#1a1a2e" }}>🗒️ Nouvelle tâche</div>
+              <button onClick={() => setShowTache(false)} style={{ background: "none", border: "none", fontSize: "22px", color: "#94a3b8", cursor: "pointer" }}>✕</button>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+              <Field label="Titre de la tâche">
+                <TInput value={tacheForm.titre} onChange={(v: string) => setTacheForm({ ...tacheForm, titre: v })} placeholder="Ex: Mettre à jour le stock" />
+              </Field>
+              <Field label="Description (optionnel)">
+                <TInput value={tacheForm.description} onChange={(v: string) => setTacheForm({ ...tacheForm, description: v })} placeholder="Ex: Vérifier les articles en rupture" />
+              </Field>
+              <Field label="Assigner à">
+                <Select value={tacheForm.assigneA} onChange={(v: string) => setTacheForm({ ...tacheForm, assigneA: v })} placeholder="Choisir un vendeur..."
+                  options={vendeurs.map((v: any) => ({ value: v.nom, label: v.nom }))} />
+              </Field>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                <Field label="Priorité">
+                  <Select value={tacheForm.priorite} onChange={(v: string) => setTacheForm({ ...tacheForm, priorite: v })} options={PRIORITES} />
+                </Field>
+                <Field label="Échéance (optionnel)">
+                  <TInput type="date" value={tacheForm.echeance} onChange={(v: string) => setTacheForm({ ...tacheForm, echeance: v })} placeholder="" />
+                </Field>
+              </div>
+              <button onClick={addTache} disabled={!tacheForm.titre || !tacheForm.assigneA} style={S.btn("#a29bfe", !tacheForm.titre || !tacheForm.assigneA)}>Créer la tâche ✓</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── MODAL SETTINGS ── */}
       {showSettings && (
         <div style={S.overlay} onClick={(e: any) => e.target === e.currentTarget && setShowSettings(false)}>
@@ -884,6 +1014,7 @@ export default function App() {
   const [stock, setStock] = useState<any[]>([]);
   const [ventes, setVentes] = useState<any[]>([]);
   const [paiements, setPaiements] = useState<any[]>([]);
+  const [taches, setTaches] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -892,6 +1023,7 @@ export default function App() {
       onSnapshot(doc(db, "vinted", "stock"), (snap) => { if (snap.exists()) setStock(JSON.parse(snap.data().data)); }),
       onSnapshot(doc(db, "vinted", "vendeurs"), (snap) => { if (snap.exists()) setVendeurs(JSON.parse(snap.data().data)); else setLoading(false); }),
       onSnapshot(doc(db, "vinted", "paiements"), (snap) => { if (snap.exists()) setPaiements(JSON.parse(snap.data().data)); }),
+      onSnapshot(doc(db, "vinted", "taches"), (snap) => { if (snap.exists()) setTaches(JSON.parse(snap.data().data)); }),
     ];
     const timer = setTimeout(() => setLoading(false), 3000);
     return () => { unsubs.forEach(u => u()); clearTimeout(timer); };
@@ -913,11 +1045,11 @@ export default function App() {
     </div>
   );
 
-  if (IS_ADMIN) return <AppAdmin vendeurs={vendeurs} setVendeurs={setVendeurs} stock={stock} setStock={setStock} ventes={ventes} setVentes={setVentes} paiements={paiements} setPaiements={setPaiements} save={save} />;
+  if (IS_ADMIN) return <AppAdmin vendeurs={vendeurs} setVendeurs={setVendeurs} stock={stock} setStock={setStock} ventes={ventes} setVentes={setVentes} paiements={paiements} setPaiements={setPaiements} taches={taches} setTaches={setTaches} save={save} />;
   if (VENDEUR_PARAM) {
     const vendeurTrouve = vendeurs.find((v: any) => v.nom.toLowerCase() === VENDEUR_PARAM);
     if (!vendeurTrouve) return <PageInconnue />;
-    return <AppVendeur nomVendeur={vendeurTrouve.nom} vendeurs={vendeurs} stock={stock} ventes={ventes} paiements={paiements} onAddVente={handleAddVente} />;
+    return <AppVendeur nomVendeur={vendeurTrouve.nom} vendeurs={vendeurs} stock={stock} ventes={ventes} paiements={paiements} taches={taches} onAddVente={handleAddVente} />;
   }
   return <PageInconnue />;
 }
