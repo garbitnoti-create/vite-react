@@ -131,7 +131,7 @@ function BadgeValidation({ statut }: { statut: ValidationStatut }) {
 }
 
 // ─── APP VENDEUR ───────────────────────────────────────────────────────────────
-function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, taches, onAddVente, onRequestValidation }: any) {
+function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, taches, onAddVente, onRequestValidation, onRequestTacheValidation }: any) {
   const [tab, setTab] = useState("ventes");
   const [showVente, setShowVente] = useState(false);
   const [venteForm, setVenteForm] = useState({ stockId: "", prixVente: "", note: "" });
@@ -146,7 +146,10 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, taches, on
     v.vendeur.toLowerCase() === nomVendeur.toLowerCase() && v.validationStatut !== "accepted"
   );
 
-  const mesTaches = taches.filter((t: any) => t.assigneA.toLowerCase() === nomVendeur.toLowerCase());
+  // Tâches : on masque les accepted
+  const mesTaches = taches.filter((t: any) =>
+    t.assigneA.toLowerCase() === nomVendeur.toLowerCase() && t.validationStatut !== "accepted"
+  );
   const monSolde = (() => {
     const vendeur = vendeurs.find((v: any) => v.nom.toLowerCase() === nomVendeur.toLowerCase());
     if (!vendeur) return 0;
@@ -185,8 +188,13 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, taches, on
     showToast("Demande de validation envoyée ✓", "#f7b731");
   };
 
+  const handleRequestTacheValidation = async (tacheId: number) => {
+    await onRequestTacheValidation(tacheId);
+    showToast("Demande de validation envoyée ✓", "#f7b731");
+  };
+
   const nomAffiche = nomVendeur.charAt(0).toUpperCase() + nomVendeur.slice(1);
-  const nbTachesEnCours = mesTaches.filter((t: any) => t.statut !== "Fait").length;
+  const nbTachesEnCours = mesTaches.filter((t: any) => t.statut !== "Fait" && t.validationStatut !== "pending").length;
 
   const PRIORITE_COLOR: any = { "Haute": "#f7b731", "Urgente": "#e94560", "Normale": "#4ecdc4" };
   const STATUT_COLOR: any = { "À faire": "#94a3b8", "En cours": "#a29bfe", "Fait": "#22c55e" };
@@ -274,6 +282,14 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, taches, on
                   </div>
                 </div>
                 {t.echeance && <div style={{ marginTop: "8px", fontSize: "11px", color: "#94a3b8" }}>📅 Échéance : {t.echeance}</div>}
+                <BadgeValidation statut={t.validationStatut} />
+                {t.validationStatut !== "pending" && (
+                  <button
+                    onClick={() => handleRequestTacheValidation(t.id)}
+                    style={{ marginTop: "10px", width: "100%", backgroundColor: t.validationStatut === "refused" ? "#fff7ed" : "#f0fdf4", color: t.validationStatut === "refused" ? "#ea580c" : "#16a34a", border: `1.5px solid ${t.validationStatut === "refused" ? "#fed7aa" : "#bbf7d0"}`, borderRadius: "10px", padding: "10px", fontSize: "13px", fontWeight: "700", cursor: "pointer" }}>
+                    {t.validationStatut === "refused" ? "🔄 Re-soumettre la validation" : "✅ Valider la tâche"}
+                  </button>
+                )}
               </div>
             ))
         )}
@@ -576,7 +592,19 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
     return null;
   };
 
-  const nbTachesEnCours = taches.filter((t: any) => t.statut !== "Fait").length;
+  // Tâches : validation identique aux ventes
+  const tachesPending = useMemo(() => taches.filter((t: any) => t.validationStatut === "pending"), [taches]);
+  const tachesAffichees = taches.filter((t: any) => t.validationStatut !== "accepted");
+  const nbTachesEnCours = tachesAffichees.filter((t: any) => t.statut !== "Fait").length + tachesPending.length;
+
+  const handleTacheValidation = async (tacheId: number, decision: "accepted" | "refused") => {
+    const newTaches = taches.map((t: any) =>
+      t.id === tacheId ? { ...t, validationStatut: decision } : t
+    );
+    setTaches(newTaches);
+    await saveSync("taches", newTaches);
+    showToast(decision === "accepted" ? "Tâche validée et archivée ✓" : "Validation refusée", decision === "accepted" ? "#22c55e" : "#ef4444");
+  };
 
   // Ventes affichées côté admin : on cache les "accepted"
   const ventesAffichees = ventes.filter((v: any) => v.validationStatut !== "accepted");
@@ -610,7 +638,7 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
             ["ventes", ventesPending.length > 0 ? `🛍️${ventesPending.length}` : "🛍️"],
             ["stock", "📦"],
             ["vendeurs", "👥"],
-            ["taches", nbTachesEnCours > 0 ? `🗒️${nbTachesEnCours}` : "🗒️"]
+            ["taches", (nbTachesEnCours + tachesPending.length) > 0 ? `🗒️${nbTachesEnCours + tachesPending.length}` : "🗒️"]
           ].map(([key, label]) => (
             <button key={key} onClick={() => setTab(key)} style={{ flex: 1, padding: "10px 4px", borderRadius: "10px", border: "none", fontSize: "14px", cursor: "pointer", backgroundColor: tab === key ? "#e94560" : "transparent", color: tab === key ? "#fff" : "rgba(255,255,255,0.45)", position: "relative" }}>
               {label}
@@ -644,8 +672,17 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
               <div style={{ backgroundColor: "#fff7ed", border: "2px solid #fed7aa", borderRadius: "14px", padding: "14px", marginTop: "12px", display: "flex", alignItems: "center", gap: "10px" }}>
                 <div style={{ fontSize: "24px" }}>⏳</div>
                 <div>
-                  <div style={{ fontWeight: "800", color: "#ea580c", fontSize: "14px" }}>{ventesPending.length} validation(s) en attente</div>
+                  <div style={{ fontWeight: "800", color: "#ea580c", fontSize: "14px" }}>{ventesPending.length} validation(s) vente en attente</div>
                   <div style={{ fontSize: "12px", color: "#9a3412", marginTop: "2px" }}>Vérifie l'onglet Ventes 🛍️</div>
+                </div>
+              </div>
+            )}
+            {tachesPending.length > 0 && (
+              <div style={{ backgroundColor: "#f5f3ff", border: "2px solid #ddd6fe", borderRadius: "14px", padding: "14px", marginTop: "12px", display: "flex", alignItems: "center", gap: "10px" }}>
+                <div style={{ fontSize: "24px" }}>⏳</div>
+                <div>
+                  <div style={{ fontWeight: "800", color: "#7c3aed", fontSize: "14px" }}>{tachesPending.length} validation(s) tâche en attente</div>
+                  <div style={{ fontSize: "12px", color: "#5b21b6", marginTop: "2px" }}>Vérifie l'onglet Tâches 🗒️</div>
                 </div>
               </div>
             )}
@@ -777,6 +814,14 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
                   </div>
                   {v.note && <div style={{ marginTop: "8px", fontSize: "12px", color: "#94a3b8", fontStyle: "italic" }}>📝 {v.note}</div>}
                   <BadgeValidation statut={v.validationStatut} />
+                  {/* Bouton valider côté admin aussi */}
+                  {v.validationStatut !== "pending" && (
+                    <button
+                      onClick={() => handleValidation(v.id, "accepted")}
+                      style={{ marginTop: "10px", width: "100%", backgroundColor: "#f0fdf4", color: "#16a34a", border: "1.5px solid #bbf7d0", borderRadius: "10px", padding: "10px", fontSize: "13px", fontWeight: "700", cursor: "pointer" }}>
+                      ✅ Valider la vente
+                    </button>
+                  )}
                 </div>
               ))
             }
@@ -844,8 +889,41 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
         {/* ── TÂCHES ADMIN ── */}
         {tab === "taches" && (
           <div>
+            {/* Section validations tâches en attente */}
+            {tachesPending.length > 0 && (
+              <div style={{ marginBottom: "20px" }}>
+                <div style={{ fontSize: "13px", fontWeight: "800", color: "#ea580c", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "10px" }}>
+                  ⏳ Validations en attente ({tachesPending.length})
+                </div>
+                {tachesPending.map((t: any) => (
+                  <div key={t.id} style={{ ...S.card, border: "2px solid #fed7aa", backgroundColor: "#fffbf5" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: "700", fontSize: "15px", color: "#1a1a2e" }}>{t.titre}</div>
+                        <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "2px" }}>{t.assigneA} · {t.date}</div>
+                        <div style={{ fontSize: "12px", color: "#ea580c", fontWeight: "700", marginTop: "2px" }}>Demande de validation</div>
+                        {t.description && <div style={{ fontSize: "12px", color: "#64748b", marginTop: "4px" }}>{t.description}</div>}
+                      </div>
+                      <span style={{ backgroundColor: PRIORITE_COLOR[t.priorite] + "22", color: PRIORITE_COLOR[t.priorite], fontSize: "10px", fontWeight: "700", padding: "3px 10px", borderRadius: "100px", whiteSpace: "nowrap", marginLeft: "10px" }}>{t.priorite}</span>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "10px" }}>
+                      <button onClick={() => handleTacheValidation(t.id, "accepted")}
+                        style={{ backgroundColor: "#f0fdf4", color: "#16a34a", border: "1.5px solid #bbf7d0", borderRadius: "10px", padding: "10px", fontSize: "13px", fontWeight: "800", cursor: "pointer" }}>
+                        ✅ Accepter
+                      </button>
+                      <button onClick={() => handleTacheValidation(t.id, "refused")}
+                        style={{ backgroundColor: "#fef2f2", color: "#ef4444", border: "1.5px solid #fecaca", borderRadius: "10px", padding: "10px", fontSize: "13px", fontWeight: "800", cursor: "pointer" }}>
+                        ❌ Refuser
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                <div style={{ height: "1px", backgroundColor: "#e2e8f0", margin: "16px 0" }} />
+              </div>
+            )}
+
             {vendeurs.map((v: any) => {
-              const vTaches = taches.filter((t: any) => t.assigneA === v.nom);
+              const vTaches = tachesAffichees.filter((t: any) => t.assigneA === v.nom);
               if (vTaches.length === 0) return null;
               return (
                 <div key={v.nom} style={{ marginBottom: "24px" }}>
@@ -868,12 +946,21 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
                           <button onClick={() => deleteTache(t.id)} style={{ background: "none", border: "none", color: "#cbd5e1", fontSize: "16px", cursor: "pointer", padding: 0 }}>✕</button>
                         </div>
                       </div>
+                      <BadgeValidation statut={t.validationStatut} />
+                      {/* Bouton valider tâche côté admin */}
+                      {t.validationStatut !== "pending" && (
+                        <button
+                          onClick={() => handleTacheValidation(t.id, "accepted")}
+                          style={{ marginTop: "10px", width: "100%", backgroundColor: "#f0fdf4", color: "#16a34a", border: "1.5px solid #bbf7d0", borderRadius: "10px", padding: "10px", fontSize: "13px", fontWeight: "700", cursor: "pointer" }}>
+                          ✅ Valider la tâche
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
               );
             })}
-            {taches.length === 0 && (
+            {tachesAffichees.length === 0 && tachesPending.length === 0 && (
               <div style={{ textAlign: "center", padding: "60px 0", color: "#94a3b8" }}>
                 <div style={{ fontSize: "52px" }}>🗒️</div>
                 <div style={{ fontWeight: "700", marginTop: "12px" }}>Aucune tâche</div>
@@ -1158,6 +1245,15 @@ export default function App() {
     await save("ventes", newVentes);
   };
 
+  // Vendeur demande validation tâche → statut "pending"
+  const handleRequestTacheValidation = async (tacheId: number) => {
+    const newTaches = taches.map((t: any) =>
+      t.id === tacheId ? { ...t, validationStatut: "pending" } : t
+    );
+    setTaches(newTaches);
+    await save("taches", newTaches);
+  };
+
   if (loading) return (
     <div style={{ minHeight: "100vh", backgroundColor: "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: "16px" }}>
       <div style={{ fontSize: "48px" }}>👗</div>
@@ -1169,7 +1265,7 @@ export default function App() {
   if (VENDEUR_PARAM) {
     const vendeurTrouve = vendeurs.find((v: any) => v.nom.toLowerCase() === VENDEUR_PARAM);
     if (!vendeurTrouve) return <PageInconnue />;
-    return <AppVendeur nomVendeur={vendeurTrouve.nom} vendeurs={vendeurs} stock={stock} ventes={ventes} paiements={paiements} taches={taches} onAddVente={handleAddVente} onRequestValidation={handleRequestValidation} />;
+    return <AppVendeur nomVendeur={vendeurTrouve.nom} vendeurs={vendeurs} stock={stock} ventes={ventes} paiements={paiements} taches={taches} onAddVente={handleAddVente} onRequestValidation={handleRequestValidation} onRequestTacheValidation={handleRequestTacheValidation} />;
   }
   return <PageInconnue />;
 }
