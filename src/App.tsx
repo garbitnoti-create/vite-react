@@ -44,6 +44,9 @@ const IS_ADMIN = params.get("admin") === "true";
 const VENDEUR_PARAM = params.get("v")?.toLowerCase() || null;
 const VENTE_PERSO_KEY = "__MOI__";
 
+// Statuts de validation : undefined/null = pas demandé, "pending" = en attente admin, "accepted" = acceptée (archivée), "refused" = refusée
+type ValidationStatut = "pending" | "accepted" | "refused" | undefined;
+
 const S: any = {
   card: { backgroundColor: "#fff", borderRadius: "16px", padding: "16px", marginBottom: "12px", boxShadow: "0 1px 4px rgba(0,0,0,0.07)", border: "1px solid #f1f5f9" },
   overlay: { position: "fixed" as const, inset: 0, backgroundColor: "rgba(0,0,0,0.55)", zIndex: 50, display: "flex", alignItems: "flex-end" },
@@ -110,8 +113,25 @@ function PageInconnue() {
   );
 }
 
+// ─── BADGE VALIDATION ──────────────────────────────────────────────────────────
+function BadgeValidation({ statut }: { statut: ValidationStatut }) {
+  if (!statut) return null;
+  const configs: Record<string, { bg: string; color: string; label: string }> = {
+    pending:  { bg: "#fff7ed", color: "#ea580c", label: "⏳ En attente de validation" },
+    refused:  { bg: "#fef2f2", color: "#ef4444", label: "❌ Validation refusée" },
+    accepted: { bg: "#f0fdf4", color: "#16a34a", label: "✅ Validée" },
+  };
+  const cfg = configs[statut];
+  if (!cfg) return null;
+  return (
+    <div style={{ marginTop: "8px", backgroundColor: cfg.bg, borderRadius: "8px", padding: "6px 10px", fontSize: "11px", fontWeight: "700", color: cfg.color }}>
+      {cfg.label}
+    </div>
+  );
+}
+
 // ─── APP VENDEUR ───────────────────────────────────────────────────────────────
-function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, taches, onAddVente }: any) {
+function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, taches, onAddVente, onRequestValidation }: any) {
   const [tab, setTab] = useState("ventes");
   const [showVente, setShowVente] = useState(false);
   const [venteForm, setVenteForm] = useState({ stockId: "", prixVente: "", note: "" });
@@ -120,12 +140,17 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, taches, on
   const showToast = (msg: string, color = "#22c55e") => { setToast({ msg, color }); setTimeout(() => setToast(null), 3000); };
 
   const stockDispo = stock.filter((s: any) => s.quantite > 0);
-  const mesVentes = ventes.filter((v: any) => v.vendeur.toLowerCase() === nomVendeur.toLowerCase());
+
+  // On affiche toutes les ventes sauf celles acceptées
+  const mesVentes = ventes.filter((v: any) =>
+    v.vendeur.toLowerCase() === nomVendeur.toLowerCase() && v.validationStatut !== "accepted"
+  );
+
   const mesTaches = taches.filter((t: any) => t.assigneA.toLowerCase() === nomVendeur.toLowerCase());
   const monSolde = (() => {
     const vendeur = vendeurs.find((v: any) => v.nom.toLowerCase() === nomVendeur.toLowerCase());
     if (!vendeur) return 0;
-    const totalDu = mesVentes.reduce((s: number, v: any) => s + v.commissionMontant, 0);
+    const totalDu = ventes.filter((v: any) => v.vendeur.toLowerCase() === nomVendeur.toLowerCase()).reduce((s: number, v: any) => s + v.commissionMontant, 0);
     const totalPaye = paiements.filter((p: any) => p.vendeur.toLowerCase() === nomVendeur.toLowerCase()).reduce((s: number, p: any) => s + p.montant, 0);
     return totalDu - totalPaye;
   })();
@@ -148,11 +173,16 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, taches, on
     const benefBrut = prixVente - article.prixAchat;
     const commissionMontant = benefBrut * (vendeur.commission / 100);
     const partEntreprise = benefBrut - commissionMontant;
-    const vente = { id: Date.now(), date: fmtDate(), mois: moisActuel(), vendeur: vendeur.nom, commission: vendeur.commission, article: article.nom, prixAchat: article.prixAchat, prixVente, benefBrut, commissionMontant, partEntreprise, note: venteForm.note };
+    const vente = { id: Date.now(), date: fmtDate(), mois: moisActuel(), vendeur: vendeur.nom, commission: vendeur.commission, article: article.nom, prixAchat: article.prixAchat, prixVente, benefBrut, commissionMontant, partEntreprise, note: venteForm.note, validationStatut: undefined };
     await onAddVente(vente, article.id);
     setVenteForm({ stockId: "", prixVente: "", note: "" });
     setShowVente(false);
     showToast(`Vente enregistrée ! Ta part : ${fmt(commissionMontant)} ✓`);
+  };
+
+  const handleRequestValidation = async (venteId: number) => {
+    await onRequestValidation(venteId);
+    showToast("Demande de validation envoyée ✓", "#f7b731");
   };
 
   const nomAffiche = nomVendeur.charAt(0).toUpperCase() + nomVendeur.slice(1);
@@ -172,7 +202,7 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, taches, on
         </div>
         <div style={{ backgroundColor: "rgba(255,255,255,0.08)", borderRadius: "14px", padding: "14px", marginBottom: "10px" }}>
           <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.45)", textTransform: "uppercase", fontWeight: "700", marginBottom: "4px" }}>💰 Total gagné</div>
-          <div style={{ fontSize: "24px", fontWeight: "800", color: "#f7b731" }}>{fmt(mesVentes.reduce((s: number, v: any) => s + v.commissionMontant, 0))}</div>
+          <div style={{ fontSize: "24px", fontWeight: "800", color: "#f7b731" }}>{fmt(ventes.filter((v: any) => v.vendeur.toLowerCase() === nomVendeur.toLowerCase()).reduce((s: number, v: any) => s + v.commissionMontant, 0))}</div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "16px" }}>
           <div style={{ backgroundColor: "rgba(255,255,255,0.08)", borderRadius: "14px", padding: "12px" }}>
@@ -212,6 +242,17 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, taches, on
                   <MiniStat label="Ma commission" value={fmt(v.commissionMontant)} color="#e94560" />
                 </div>
                 {v.note && <div style={{ marginTop: "8px", fontSize: "12px", color: "#94a3b8", fontStyle: "italic" }}>📝 {v.note}</div>}
+
+                {/* ── BLOC VALIDATION ── */}
+                <BadgeValidation statut={v.validationStatut} />
+                {/* Bouton Valider : visible seulement si pas encore en attente ou refusée */}
+                {v.validationStatut !== "pending" && (
+                  <button
+                    onClick={() => handleRequestValidation(v.id)}
+                    style={{ marginTop: "10px", width: "100%", backgroundColor: v.validationStatut === "refused" ? "#fff7ed" : "#f0fdf4", color: v.validationStatut === "refused" ? "#ea580c" : "#16a34a", border: `1.5px solid ${v.validationStatut === "refused" ? "#fed7aa" : "#bbf7d0"}`, borderRadius: "10px", padding: "10px", fontSize: "13px", fontWeight: "700", cursor: "pointer" }}>
+                    {v.validationStatut === "refused" ? "🔄 Re-soumettre la validation" : "✅ Valider la vente"}
+                  </button>
+                )}
               </div>
             ))
         )}
@@ -347,7 +388,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
   const [showAjustement, setShowAjustement] = useState<any>(null);
   const [ajustementForm, setAjustementForm] = useState({ montant: "", note: "", type: "prime" });
 
-  // ── État tâches ──
   const [showTache, setShowTache] = useState(false);
   const [tacheForm, setTacheForm] = useState({ titre: "", description: "", assigneA: "", priorite: "Normale", echeance: "" });
 
@@ -357,6 +397,10 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
   const stockDispo = stock.filter((s: any) => s.quantite > 0);
   const ventesMonth = useMemo(() => ventes.filter((v: any) => v.mois === moisActuel()), [ventes]);
 
+  // Ventes en attente de validation admin
+  const ventesPending = useMemo(() => ventes.filter((v: any) => v.validationStatut === "pending"), [ventes]);
+
+  // Stats : toutes les ventes comptent (y compris accepted)
   const stats = useMemo(() => ({
     ca: ventes.reduce((s: number, v: any) => s + v.prixVente, 0),
     caMonth: ventesMonth.reduce((s: number, v: any) => s + v.prixVente, 0),
@@ -403,6 +447,16 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
 
   const articleVenteSelectionne = stock.find((s: any) => s.id === +venteForm.stockId);
 
+  // ── Accepter / Refuser une validation ──
+  const handleValidation = async (venteId: number, decision: "accepted" | "refused") => {
+    const newVentes = ventes.map((v: any) =>
+      v.id === venteId ? { ...v, validationStatut: decision } : v
+    );
+    setVentes(newVentes);
+    await saveSync("ventes", newVentes);
+    showToast(decision === "accepted" ? "Vente validée et archivée ✓" : "Validation refusée", decision === "accepted" ? "#22c55e" : "#ef4444");
+  };
+
   const addStock = async () => {
     if (!stockForm.nom || !stockForm.prixAchat) return;
     const newStock = [...stock, { id: Date.now(), ...stockForm, prixAchat: +stockForm.prixAchat, quantite: +stockForm.quantite, mois: moisActuel() }];
@@ -443,6 +497,7 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
       article: article.nom,
       photoUrl: article.photoUrl || "",
       prixAchat: article.prixAchat, prixVente, benefBrut, commissionMontant, partEntreprise, note: venteForm.note,
+      validationStatut: undefined,
     };
     const newVentes = [vente, ...ventes];
     const newStock = stock.map((s: any) => s.id === article.id ? { ...s, quantite: s.quantite - 1 } : s);
@@ -481,7 +536,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
     showToast(`Ajustement enregistré ✓`);
   };
 
-  // ── Ajouter une tâche ──
   const addTache = async () => {
     if (!tacheForm.titre || !tacheForm.assigneA) return;
     const t = { id: Date.now(), date: fmtDate(), statut: "À faire", ...tacheForm };
@@ -491,14 +545,12 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
     setShowTache(false); showToast("Tâche ajoutée ✓");
   };
 
-  // ── Changer le statut d'une tâche ──
   const cycleStatut = async (id: number) => {
     const CYCLE = ["À faire", "En cours", "Fait"];
     const newTaches = taches.map((t: any) => t.id === id ? { ...t, statut: CYCLE[(CYCLE.indexOf(t.statut) + 1) % CYCLE.length] } : t);
     setTaches(newTaches); await saveSync("taches", newTaches);
   };
 
-  // ── Supprimer une tâche ──
   const deleteTache = async (id: number) => {
     const newTaches = taches.filter((t: any) => t.id !== id);
     setTaches(newTaches); await saveSync("taches", newTaches);
@@ -526,6 +578,9 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
 
   const nbTachesEnCours = taches.filter((t: any) => t.statut !== "Fait").length;
 
+  // Ventes affichées côté admin : on cache les "accepted"
+  const ventesAffichees = ventes.filter((v: any) => v.validationStatut !== "accepted");
+
   return (
     <div style={{ minHeight: "100vh", backgroundColor: "#f1f5f9", fontFamily: "system-ui, -apple-system, sans-serif", maxWidth: "480px", margin: "0 auto" }}>
       {toast && <div style={{ position: "fixed", top: "16px", left: "50%", transform: "translateX(-50%)", backgroundColor: toast.color, color: "#fff", padding: "12px 24px", borderRadius: "100px", fontSize: "14px", fontWeight: "700", zIndex: 100, whiteSpace: "nowrap", boxShadow: "0 4px 20px rgba(0,0,0,0.2)" }}>{toast.msg}</div>}
@@ -549,10 +604,15 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
             </div>
           ))}
         </div>
-        {/* Nav tabs — 5 onglets avec tâches */}
         <div style={{ display: "flex", gap: "3px", backgroundColor: "rgba(255,255,255,0.08)", borderRadius: "14px", padding: "4px" }}>
-          {[["dashboard", "📊"], ["ventes", "🛍️"], ["stock", "📦"], ["vendeurs", "👥"], ["taches", nbTachesEnCours > 0 ? `🗒️${nbTachesEnCours}` : "🗒️"]].map(([key, label]) => (
-            <button key={key} onClick={() => setTab(key)} style={{ flex: 1, padding: "10px 4px", borderRadius: "10px", border: "none", fontSize: "14px", cursor: "pointer", backgroundColor: tab === key ? "#e94560" : "transparent", color: tab === key ? "#fff" : "rgba(255,255,255,0.45)" }}>
+          {[
+            ["dashboard", "📊"],
+            ["ventes", ventesPending.length > 0 ? `🛍️${ventesPending.length}` : "🛍️"],
+            ["stock", "📦"],
+            ["vendeurs", "👥"],
+            ["taches", nbTachesEnCours > 0 ? `🗒️${nbTachesEnCours}` : "🗒️"]
+          ].map(([key, label]) => (
+            <button key={key} onClick={() => setTab(key)} style={{ flex: 1, padding: "10px 4px", borderRadius: "10px", border: "none", fontSize: "14px", cursor: "pointer", backgroundColor: tab === key ? "#e94560" : "transparent", color: tab === key ? "#fff" : "rgba(255,255,255,0.45)", position: "relative" }}>
               {label}
             </button>
           ))}
@@ -578,6 +638,17 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
                 ))}
               </div>
             </div>
+
+            {/* Bandeau validations en attente */}
+            {ventesPending.length > 0 && (
+              <div style={{ backgroundColor: "#fff7ed", border: "2px solid #fed7aa", borderRadius: "14px", padding: "14px", marginTop: "12px", display: "flex", alignItems: "center", gap: "10px" }}>
+                <div style={{ fontSize: "24px" }}>⏳</div>
+                <div>
+                  <div style={{ fontWeight: "800", color: "#ea580c", fontSize: "14px" }}>{ventesPending.length} validation(s) en attente</div>
+                  <div style={{ fontSize: "12px", color: "#9a3412", marginTop: "2px" }}>Vérifie l'onglet Ventes 🛍️</div>
+                </div>
+              </div>
+            )}
 
             {dataCAMois.length > 1 && (
               <div style={{ ...S.card, marginTop: "20px" }}>
@@ -639,34 +710,77 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
 
         {/* ── VENTES ── */}
         {tab === "ventes" && (
-          ventes.length === 0
-            ? <div style={{ textAlign: "center", padding: "60px 0", color: "#94a3b8" }}><div style={{ fontSize: "52px" }}>🛍️</div><div style={{ fontWeight: "700", marginTop: "12px" }}>Aucune vente</div></div>
-            : ventes.map((v: any) => (
-              <div key={v.id} style={S.card}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                  <div style={{ display: "flex", gap: "10px", alignItems: "center", flex: 1 }}>
-                    <ArticlePhoto url={v.photoUrl} size={48} />
-                    <div>
-                      <div style={{ fontWeight: "700", fontSize: "15px", color: "#1a1a2e" }}>{v.article}</div>
-                      <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "2px" }}>
-                        {v.date} ·{" "}
-                        {v.ventePerso
-                          ? <span style={{ color: "#a29bfe", fontWeight: "700" }}>👤 Moi (perso)</span>
-                          : `${v.vendeur} (${v.commission}%)`
-                        }
+          <div>
+            {/* Section validations en attente */}
+            {ventesPending.length > 0 && (
+              <div style={{ marginBottom: "20px" }}>
+                <div style={{ fontSize: "13px", fontWeight: "800", color: "#ea580c", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "10px" }}>
+                  ⏳ Validations en attente ({ventesPending.length})
+                </div>
+                {ventesPending.map((v: any) => (
+                  <div key={v.id} style={{ ...S.card, border: "2px solid #fed7aa", backgroundColor: "#fffbf5" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                      <div style={{ display: "flex", gap: "10px", alignItems: "center", flex: 1 }}>
+                        <ArticlePhoto url={v.photoUrl} size={48} />
+                        <div>
+                          <div style={{ fontWeight: "700", fontSize: "15px", color: "#1a1a2e" }}>{v.article}</div>
+                          <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "2px" }}>{v.date} · {v.vendeur}</div>
+                          <div style={{ fontSize: "12px", color: "#ea580c", fontWeight: "700", marginTop: "2px" }}>Demande de validation</div>
+                        </div>
                       </div>
                     </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "10px" }}>
+                      <MiniStat label="Vendu" value={fmt(v.prixVente)} color="#4ecdc4" />
+                      <MiniStat label="Entreprise" value={fmt(v.partEntreprise)} color="#e94560" />
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "10px" }}>
+                      <button onClick={() => handleValidation(v.id, "accepted")}
+                        style={{ backgroundColor: "#f0fdf4", color: "#16a34a", border: "1.5px solid #bbf7d0", borderRadius: "10px", padding: "10px", fontSize: "13px", fontWeight: "800", cursor: "pointer" }}>
+                        ✅ Accepter
+                      </button>
+                      <button onClick={() => handleValidation(v.id, "refused")}
+                        style={{ backgroundColor: "#fef2f2", color: "#ef4444", border: "1.5px solid #fecaca", borderRadius: "10px", padding: "10px", fontSize: "13px", fontWeight: "800", cursor: "pointer" }}>
+                        ❌ Refuser
+                      </button>
+                    </div>
                   </div>
-                  <button onClick={() => deleteVente(v.id)} style={{ background: "none", border: "none", color: "#cbd5e1", fontSize: "18px", cursor: "pointer" }}>✕</button>
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: v.ventePerso ? "1fr 1fr" : "1fr 1fr 1fr", gap: "8px", marginTop: "12px" }}>
-                  <MiniStat label="Vendu" value={fmt(v.prixVente)} color="#4ecdc4" />
-                  {!v.ventePerso && <MiniStat label="Commission" value={fmt(v.commissionMontant)} color="#f7b731" />}
-                  <MiniStat label="Entreprise" value={fmt(v.partEntreprise)} color="#e94560" />
-                </div>
-                {v.note && <div style={{ marginTop: "8px", fontSize: "12px", color: "#94a3b8", fontStyle: "italic" }}>📝 {v.note}</div>}
+                ))}
+                <div style={{ height: "1px", backgroundColor: "#e2e8f0", margin: "16px 0" }} />
               </div>
-            ))
+            )}
+
+            {/* Ventes normales (hors accepted) */}
+            {ventesAffichees.length === 0
+              ? <div style={{ textAlign: "center", padding: "60px 0", color: "#94a3b8" }}><div style={{ fontSize: "52px" }}>🛍️</div><div style={{ fontWeight: "700", marginTop: "12px" }}>Aucune vente</div></div>
+              : ventesAffichees.map((v: any) => (
+                <div key={v.id} style={{ ...S.card, opacity: v.validationStatut === "pending" ? 0.6 : 1 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                    <div style={{ display: "flex", gap: "10px", alignItems: "center", flex: 1 }}>
+                      <ArticlePhoto url={v.photoUrl} size={48} />
+                      <div>
+                        <div style={{ fontWeight: "700", fontSize: "15px", color: "#1a1a2e" }}>{v.article}</div>
+                        <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "2px" }}>
+                          {v.date} ·{" "}
+                          {v.ventePerso
+                            ? <span style={{ color: "#a29bfe", fontWeight: "700" }}>👤 Moi (perso)</span>
+                            : `${v.vendeur} (${v.commission}%)`
+                          }
+                        </div>
+                      </div>
+                    </div>
+                    <button onClick={() => deleteVente(v.id)} style={{ background: "none", border: "none", color: "#cbd5e1", fontSize: "18px", cursor: "pointer" }}>✕</button>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: v.ventePerso ? "1fr 1fr" : "1fr 1fr 1fr", gap: "8px", marginTop: "12px" }}>
+                    <MiniStat label="Vendu" value={fmt(v.prixVente)} color="#4ecdc4" />
+                    {!v.ventePerso && <MiniStat label="Commission" value={fmt(v.commissionMontant)} color="#f7b731" />}
+                    <MiniStat label="Entreprise" value={fmt(v.partEntreprise)} color="#e94560" />
+                  </div>
+                  {v.note && <div style={{ marginTop: "8px", fontSize: "12px", color: "#94a3b8", fontStyle: "italic" }}>📝 {v.note}</div>}
+                  <BadgeValidation statut={v.validationStatut} />
+                </div>
+              ))
+            }
+          </div>
         )}
 
         {/* ── STOCK ── */}
@@ -730,7 +844,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
         {/* ── TÂCHES ADMIN ── */}
         {tab === "taches" && (
           <div>
-            {/* Résumé par vendeur */}
             {vendeurs.map((v: any) => {
               const vTaches = taches.filter((t: any) => t.assigneA === v.nom);
               if (vTaches.length === 0) return null;
@@ -749,9 +862,7 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
                         </div>
                         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "6px", marginLeft: "10px" }}>
                           <span style={{ backgroundColor: PRIORITE_COLOR[t.priorite] + "22", color: PRIORITE_COLOR[t.priorite], fontSize: "10px", fontWeight: "700", padding: "3px 10px", borderRadius: "100px", whiteSpace: "nowrap" }}>{t.priorite}</span>
-                          <button
-                            onClick={() => cycleStatut(t.id)}
-                            style={{ backgroundColor: STATUT_COLOR[t.statut] + "22", color: STATUT_COLOR[t.statut], fontSize: "10px", fontWeight: "700", padding: "3px 10px", borderRadius: "100px", border: "none", cursor: "pointer", whiteSpace: "nowrap" }}>
+                          <button onClick={() => cycleStatut(t.id)} style={{ backgroundColor: STATUT_COLOR[t.statut] + "22", color: STATUT_COLOR[t.statut], fontSize: "10px", fontWeight: "700", padding: "3px 10px", borderRadius: "100px", border: "none", cursor: "pointer", whiteSpace: "nowrap" }}>
                             {t.statut} →
                           </button>
                           <button onClick={() => deleteTache(t.id)} style={{ background: "none", border: "none", color: "#cbd5e1", fontSize: "16px", cursor: "pointer", padding: 0 }}>✕</button>
@@ -1038,6 +1149,15 @@ export default function App() {
     await Promise.all([save("ventes", newVentes), save("stock", newStock)]);
   };
 
+  // Vendeur demande validation → statut "pending"
+  const handleRequestValidation = async (venteId: number) => {
+    const newVentes = ventes.map((v: any) =>
+      v.id === venteId ? { ...v, validationStatut: "pending" } : v
+    );
+    setVentes(newVentes);
+    await save("ventes", newVentes);
+  };
+
   if (loading) return (
     <div style={{ minHeight: "100vh", backgroundColor: "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: "16px" }}>
       <div style={{ fontSize: "48px" }}>👗</div>
@@ -1049,7 +1169,7 @@ export default function App() {
   if (VENDEUR_PARAM) {
     const vendeurTrouve = vendeurs.find((v: any) => v.nom.toLowerCase() === VENDEUR_PARAM);
     if (!vendeurTrouve) return <PageInconnue />;
-    return <AppVendeur nomVendeur={vendeurTrouve.nom} vendeurs={vendeurs} stock={stock} ventes={ventes} paiements={paiements} taches={taches} onAddVente={handleAddVente} />;
+    return <AppVendeur nomVendeur={vendeurTrouve.nom} vendeurs={vendeurs} stock={stock} ventes={ventes} paiements={paiements} taches={taches} onAddVente={handleAddVente} onRequestValidation={handleRequestValidation} />;
   }
   return <PageInconnue />;
 }
