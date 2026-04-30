@@ -44,7 +44,21 @@ const IS_ADMIN = params.get("admin") === "true";
 const VENDEUR_PARAM = params.get("v")?.toLowerCase() || null;
 const VENTE_PERSO_KEY = "__MOI__";
 
-// Statuts de validation : undefined/null = pas demandé, "pending" = en attente admin, "accepted" = acceptée (archivée), "refused" = refusée
+// Lot de stock : chaque article peut avoir plusieurs lots avec des prix différents
+// Un lot "enAttente" = livraison pas encore reçue
+type Lot = {
+  id: number;
+  quantite: number;
+  prixAchat: number;
+  enAttente: boolean; // true = en attente de livraison, false = disponible
+  dateAjout: string;
+};
+
+// Structure d'un article stock
+// quantite = total disponible (somme des lots non en attente)
+// prixAchat = prix du lot actuel disponible (calculé dynamiquement)
+// lots = tableau des lots (disponibles + en attente)
+
 type ValidationStatut = "pending" | "accepted" | "refused" | undefined;
 
 const S: any = {
@@ -103,6 +117,73 @@ async function fbSave(key: string, data: any) {
   await setDoc(doc(db, "vinted", key), { data: JSON.stringify(data) });
 }
 
+// ── Helpers pour la gestion des lots ──────────────────────────────────────────
+
+// Calcule le prix d'achat courant d'un article (premier lot disponible, sinon premier lot en attente)
+function getPrixActuel(article: any): number {
+  if (!article.lots || article.lots.length === 0) return article.prixAchat || 0;
+  const lotDispo = article.lots.find((l: Lot) => !l.enAttente && l.quantite > 0);
+  if (lotDispo) return lotDispo.prixAchat;
+  const lotSuivant = article.lots.find((l: Lot) => !l.enAttente);
+  if (lotSuivant) return lotSuivant.prixAchat;
+  return article.lots[0]?.prixAchat || article.prixAchat || 0;
+}
+
+// Calcule la quantité disponible (lots non en attente)
+function getQuantiteDispo(article: any): number {
+  if (!article.lots) return article.quantite || 0;
+  return article.lots.filter((l: Lot) => !l.enAttente).reduce((s: number, l: Lot) => s + l.quantite, 0);
+}
+
+// Calcule la quantité en attente de livraison
+function getQuantiteAttente(article: any): number {
+  if (!article.lots) return 0;
+  return article.lots.filter((l: Lot) => l.enAttente).reduce((s: number, l: Lot) => s + l.quantite, 0);
+}
+
+// Décrémente le stock d'un article en respectant l'ordre des lots (FIFO)
+function decrementeStock(article: any): any {
+  if (!article.lots || article.lots.length === 0) {
+    return { ...article, quantite: Math.max(0, (article.quantite || 0) - 1) };
+  }
+  let restADecrémenter = 1;
+  const newLots = article.lots.map((l: Lot) => {
+    if (restADecrémenter <= 0 || l.enAttente) return l;
+    const deduct = Math.min(restADecrémenter, l.quantite);
+    restADecrémenter -= deduct;
+    return { ...l, quantite: l.quantite - deduct };
+  });
+  return { ...article, lots: newLots, quantite: getQuantiteDispo({ lots: newLots }) };
+}
+
+// Incrémente le stock (annulation vente)
+function incrementeStock(article: any): any {
+  if (!article.lots || article.lots.length === 0) {
+    return { ...article, quantite: (article.quantite || 0) + 1 };
+  }
+  // Ajoute au dernier lot disponible
+  const idx = article.lots.reduce((last: number, l: Lot, i: number) => (!l.enAttente ? i : last), -1);
+  if (idx === -1) {
+    const newLot: Lot = { id: Date.now(), quantite: 1, prixAchat: getPrixActuel(article), enAttente: false, dateAjout: fmtDate() };
+    return { ...article, lots: [...article.lots, newLot], quantite: getQuantiteDispo(article) + 1 };
+  }
+  const newLots = article.lots.map((l: Lot, i: number) => i === idx ? { ...l, quantite: l.quantite + 1 } : l);
+  return { ...article, lots: newLots, quantite: getQuantiteDispo({ lots: newLots }) };
+}
+
+// Migre un article ancien format (sans lots) vers le nouveau format
+function migrateArticle(article: any): any {
+  if (article.lots) return article; // déjà migré
+  const lot: Lot = {
+    id: article.id,
+    quantite: article.quantite || 0,
+    prixAchat: article.prixAchat || 0,
+    enAttente: false,
+    dateAjout: article.dateAjout || fmtDate(),
+  };
+  return { ...article, lots: [lot] };
+}
+
 function PageInconnue() {
   return (
     <div style={{ minHeight: "100vh", backgroundColor: "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: "16px", padding: "24px" }}>
@@ -113,7 +194,6 @@ function PageInconnue() {
   );
 }
 
-// ─── BADGE VALIDATION ──────────────────────────────────────────────────────────
 function BadgeValidation({ statut }: { statut: ValidationStatut }) {
   if (!statut) return null;
   const configs: Record<string, { bg: string; color: string; label: string }> = {
@@ -130,6 +210,16 @@ function BadgeValidation({ statut }: { statut: ValidationStatut }) {
   );
 }
 
+// ── Badge "en attente de livraison" ──────────────────────────────────────────
+function BadgeAttente({ quantite }: { quantite: number }) {
+  if (quantite <= 0) return null;
+  return (
+    <div style={{ backgroundColor: "#fff7ed", borderRadius: "8px", padding: "4px 8px", fontSize: "11px", fontWeight: "700", color: "#ea580c", display: "inline-flex", alignItems: "center", gap: "4px" }}>
+      🚚 {quantite} en attente de livraison
+    </div>
+  );
+}
+
 // ─── APP VENDEUR ───────────────────────────────────────────────────────────────
 function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, taches, onAddVente, onRequestValidation, onRequestTacheValidation }: any) {
   const [tab, setTab] = useState("ventes");
@@ -139,14 +229,13 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, taches, on
 
   const showToast = (msg: string, color = "#22c55e") => { setToast({ msg, color }); setTimeout(() => setToast(null), 3000); };
 
-  const stockDispo = stock.filter((s: any) => s.quantite > 0);
+  // Stock disponible (hors attente de livraison)
+  const stockDispo = stock.map(migrateArticle).filter((s: any) => getQuantiteDispo(s) > 0);
 
-  // On affiche toutes les ventes sauf celles acceptées
   const mesVentes = ventes.filter((v: any) =>
     v.vendeur.toLowerCase() === nomVendeur.toLowerCase() && v.validationStatut !== "accepted"
   );
 
-  // Tâches : on masque les accepted
   const mesTaches = taches.filter((t: any) =>
     t.assigneA.toLowerCase() === nomVendeur.toLowerCase() && t.validationStatut !== "accepted"
   );
@@ -165,18 +254,19 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, taches, on
     }).sort((a: any, b: any) => b.nb - a.nb);
   }, [ventes, vendeurs]);
 
-  const articleSelectionne = stock.find((s: any) => s.id === +venteForm.stockId);
+  const articleSelectionne = stock.map(migrateArticle).find((s: any) => s.id === +venteForm.stockId);
 
   const addVente = async () => {
     if (!venteForm.stockId || !venteForm.prixVente) return;
-    const article = stock.find((s: any) => s.id === +venteForm.stockId);
+    const article = stock.map(migrateArticle).find((s: any) => s.id === +venteForm.stockId);
     const vendeur = vendeurs.find((v: any) => v.nom.toLowerCase() === nomVendeur.toLowerCase());
     if (!article || !vendeur) return;
     const prixVente = +venteForm.prixVente;
-    const benefBrut = prixVente - article.prixAchat;
+    const prixAchat = getPrixActuel(article);
+    const benefBrut = prixVente - prixAchat;
     const commissionMontant = benefBrut * (vendeur.commission / 100);
     const partEntreprise = benefBrut - commissionMontant;
-    const vente = { id: Date.now(), date: fmtDate(), mois: moisActuel(), vendeur: vendeur.nom, commission: vendeur.commission, article: article.nom, prixAchat: article.prixAchat, prixVente, benefBrut, commissionMontant, partEntreprise, note: venteForm.note, validationStatut: undefined };
+    const vente = { id: Date.now(), date: fmtDate(), mois: moisActuel(), vendeur: vendeur.nom, commission: vendeur.commission, article: article.nom, prixAchat, prixVente, benefBrut, commissionMontant, partEntreprise, note: venteForm.note, validationStatut: undefined };
     await onAddVente(vente, article.id);
     setVenteForm({ stockId: "", prixVente: "", note: "" });
     setShowVente(false);
@@ -250,10 +340,7 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, taches, on
                   <MiniStat label="Ma commission" value={fmt(v.commissionMontant)} color="#e94560" />
                 </div>
                 {v.note && <div style={{ marginTop: "8px", fontSize: "12px", color: "#94a3b8", fontStyle: "italic" }}>📝 {v.note}</div>}
-
-                {/* ── BLOC VALIDATION ── */}
                 <BadgeValidation statut={v.validationStatut} />
-                {/* Bouton Valider : visible seulement si pas encore en attente ou refusée */}
                 {v.validationStatut !== "pending" && (
                   <button
                     onClick={() => handleRequestValidation(v.id)}
@@ -265,7 +352,6 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, taches, on
             ))
         )}
 
-        {/* ── TÂCHES VENDEUR ── */}
         {tab === "taches" && (
           mesTaches.length === 0
             ? <div style={{ textAlign: "center", padding: "60px 0", color: "#94a3b8" }}><div style={{ fontSize: "52px" }}>🗒️</div><div style={{ fontWeight: "700", marginTop: "12px" }}>Aucune tâche</div><div style={{ fontSize: "13px", marginTop: "4px" }}>Pas de tâche assignée pour l'instant</div></div>
@@ -317,18 +403,23 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, taches, on
         {tab === "stock" && (
           stock.length === 0
             ? <div style={{ textAlign: "center", padding: "60px 0", color: "#94a3b8" }}><div style={{ fontSize: "52px" }}>📦</div><div style={{ fontWeight: "700", marginTop: "12px" }}>Stock vide</div></div>
-            : stock.map((s: any) => (
-              <div key={s.id} style={{ ...S.card, opacity: s.quantite === 0 ? 0.4 : 1 }}>
-                <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
-                  <ArticlePhoto url={s.photoUrl} size={56} />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: "700", fontSize: "15px", color: "#1a1a2e" }}>{s.nom}</div>
-                    <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "2px" }}>{s.categorie}</div>
+            : stock.map(migrateArticle).map((s: any) => {
+                const dispo = getQuantiteDispo(s);
+                const attente = getQuantiteAttente(s);
+                return (
+                  <div key={s.id} style={{ ...S.card, opacity: dispo === 0 && attente === 0 ? 0.4 : 1 }}>
+                    <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+                      <ArticlePhoto url={s.photoUrl} size={56} />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: "700", fontSize: "15px", color: "#1a1a2e" }}>{s.nom}</div>
+                        <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "2px" }}>{s.categorie}</div>
+                        {attente > 0 && <div style={{ marginTop: "4px" }}><BadgeAttente quantite={attente} /></div>}
+                      </div>
+                      <div style={{ fontSize: "26px", fontWeight: "800", color: dispo === 0 ? "#ef4444" : "#22c55e" }}>×{dispo}</div>
+                    </div>
                   </div>
-                  <div style={{ fontSize: "26px", fontWeight: "800", color: s.quantite === 0 ? "#ef4444" : "#22c55e" }}>×{s.quantite}</div>
-                </div>
-              </div>
-            ))
+                );
+              })
         )}
       </div>
 
@@ -348,7 +439,7 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, taches, on
                 {stockDispo.length === 0
                   ? <div style={{ backgroundColor: "#fef2f2", color: "#ef4444", padding: "14px", borderRadius: "12px", fontSize: "13px", fontWeight: "600", textAlign: "center" }}>⚠️ Stock vide</div>
                   : <Select value={venteForm.stockId} onChange={(v: string) => setVenteForm({ ...venteForm, stockId: v })} placeholder="Choisir un article..."
-                      options={stockDispo.map((s: any) => ({ value: String(s.id), label: `${s.nom} (×${s.quantite})` }))} />
+                      options={stockDispo.map((s: any) => ({ value: String(s.id), label: `${s.nom} (×${getQuantiteDispo(s)})` }))} />
                 }
               </Field>
               {articleSelectionne && articleSelectionne.photoUrl && (
@@ -364,10 +455,11 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, taches, on
                 <TInput type="number" value={venteForm.prixVente} onChange={(v: string) => setVenteForm({ ...venteForm, prixVente: v })} placeholder="Ex: 50" />
               </Field>
               {venteForm.stockId && venteForm.prixVente && (() => {
-                const article = stock.find((s: any) => s.id === +venteForm.stockId);
+                const article = stock.map(migrateArticle).find((s: any) => s.id === +venteForm.stockId);
                 const vendeur = vendeurs.find((v: any) => v.nom.toLowerCase() === nomVendeur.toLowerCase());
                 if (!article || !vendeur) return null;
-                const benef = +venteForm.prixVente - article.prixAchat;
+                const prixAchat = getPrixActuel(article);
+                const benef = +venteForm.prixVente - prixAchat;
                 const comm = benef * vendeur.commission / 100;
                 return (
                   <div style={{ backgroundColor: "#f0fdf4", borderRadius: "14px", padding: "14px", border: "2px solid #bbf7d0", textAlign: "center" }}>
@@ -399,7 +491,14 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
   const [showPaiement, setShowPaiement] = useState<any>(null);
   const [syncing, setSyncing] = useState(false);
   const [venteForm, setVenteForm] = useState({ vendeur: VENTE_PERSO_KEY, stockId: "", prixVente: "", note: "" });
+
+  // Formulaire ajout stock (nouveau = toujours en attente de livraison)
   const [stockForm, setStockForm] = useState({ nom: "", categorie: "Vêtements", prixAchat: "", quantite: "1", photoUrl: "" });
+
+  // Formulaire "ajouter du stock" à un article existant
+  const [showAddLot, setShowAddLot] = useState<any>(null); // article concerné
+  const [lotForm, setLotForm] = useState({ quantite: "1", prixAchat: "" });
+
   const [paiementForm, setPaiementForm] = useState({ montant: "", note: "" });
   const [showAjustement, setShowAjustement] = useState<any>(null);
   const [ajustementForm, setAjustementForm] = useState({ montant: "", note: "", type: "prime" });
@@ -410,13 +509,18 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
   const showToast = (msg: string, color = "#22c55e") => { setToast({ msg, color }); setTimeout(() => setToast(null), 3000); };
   const saveSync = async (key: string, data: any) => { setSyncing(true); await save(key, data); setTimeout(() => setSyncing(false), 800); };
 
-  const stockDispo = stock.filter((s: any) => s.quantite > 0);
-  const ventesMonth = useMemo(() => ventes.filter((v: any) => v.mois === moisActuel()), [ventes]);
+  // Stock migré (assure compatibilité)
+  const stockMigre = useMemo(() => stock.map(migrateArticle), [stock]);
 
-  // Ventes en attente de validation admin
+  const stockDispo = stockMigre.filter((s: any) => getQuantiteDispo(s) > 0);
+  const ventesMonth = useMemo(() => ventes.filter((v: any) => v.mois === moisActuel()), [ventes]);
   const ventesPending = useMemo(() => ventes.filter((v: any) => v.validationStatut === "pending"), [ventes]);
 
-  // Stats : toutes les ventes comptent (y compris accepted)
+  // Nombre total de lots en attente de livraison
+  const nbLotsEnAttente = useMemo(() => stockMigre.reduce((total: number, s: any) => {
+    return total + (s.lots || []).filter((l: Lot) => l.enAttente).length;
+  }, 0), [stockMigre]);
+
   const stats = useMemo(() => ({
     ca: ventes.reduce((s: number, v: any) => s + v.prixVente, 0),
     caMonth: ventesMonth.reduce((s: number, v: any) => s + v.prixVente, 0),
@@ -447,10 +551,7 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
   const dataTopArticles = useMemo(() => {
     const map: Record<string, number> = {};
     ventes.forEach((v: any) => { map[v.article] = (map[v.article] || 0) + 1; });
-    return Object.entries(map)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 6)
-      .map(([nom, nb]) => ({ nom: nom.length > 14 ? nom.slice(0, 14) + "…" : nom, nb }));
+    return Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([nom, nb]) => ({ nom: nom.length > 14 ? nom.slice(0, 14) + "…" : nom, nb }));
   }, [ventes]);
 
   const statsVendeurs = useMemo(() => vendeurs.map((v: any) => {
@@ -461,31 +562,82 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
     return { ...v, nb: vv.length, nbMonth: vvM.length, ca: vv.reduce((s: number, x: any) => s + x.prixVente, 0), commissionTotal: totalDu, commissionMonth: vvM.reduce((s: number, x: any) => s + x.commissionMontant, 0), totalPaye, solde: totalDu - totalPaye };
   }), [ventes, ventesMonth, paiements, vendeurs]);
 
-  const articleVenteSelectionne = stock.find((s: any) => s.id === +venteForm.stockId);
+  const articleVenteSelectionne = stockMigre.find((s: any) => s.id === +venteForm.stockId);
 
-  // ── Accepter / Refuser une validation ──
+  // ── Validation ventes ──
   const handleValidation = async (venteId: number, decision: "accepted" | "refused") => {
-    const newVentes = ventes.map((v: any) =>
-      v.id === venteId ? { ...v, validationStatut: decision } : v
-    );
+    const newVentes = ventes.map((v: any) => v.id === venteId ? { ...v, validationStatut: decision } : v);
     setVentes(newVentes);
     await saveSync("ventes", newVentes);
     showToast(decision === "accepted" ? "Vente validée et archivée ✓" : "Validation refusée", decision === "accepted" ? "#22c55e" : "#ef4444");
   };
 
+  // ── Ajout article (directement en attente de livraison) ──
   const addStock = async () => {
     if (!stockForm.nom || !stockForm.prixAchat) return;
-    const newStock = [...stock, { id: Date.now(), ...stockForm, prixAchat: +stockForm.prixAchat, quantite: +stockForm.quantite, mois: moisActuel() }];
+    const premierLot: Lot = {
+      id: Date.now(),
+      quantite: +stockForm.quantite,
+      prixAchat: +stockForm.prixAchat,
+      enAttente: true, // ← toujours en attente de livraison
+      dateAjout: fmtDate(),
+    };
+    const newArticle = {
+      id: Date.now() + 1,
+      nom: stockForm.nom,
+      categorie: stockForm.categorie,
+      prixAchat: +stockForm.prixAchat, // conservé pour compatibilité
+      quantite: 0, // 0 car en attente
+      photoUrl: stockForm.photoUrl,
+      mois: moisActuel(),
+      lots: [premierLot],
+    };
+    const newStock = [...stock, newArticle];
     setStock(newStock); await saveSync("stock", newStock);
     setStockForm({ nom: "", categorie: "Vêtements", prixAchat: "", quantite: "1", photoUrl: "" });
-    setShowStock(false); showToast("Article ajouté ✓");
+    setShowStock(false);
+    showToast("Article ajouté — en attente de livraison 🚚");
   };
 
+  // ── Modifier article existant ──
   const saveEditStock = async () => {
     if (!editStock) return;
-    const newStock = stock.map((s: any) => s.id === editStock.id ? { ...editStock, prixAchat: +editStock.prixAchat, quantite: +editStock.quantite } : s);
+    const newStock = stockMigre.map((s: any) => s.id === editStock.id
+      ? { ...editStock, prixAchat: +editStock.prixAchat, quantite: getQuantiteDispo(editStock) }
+      : s
+    );
     setStock(newStock); await saveSync("stock", newStock);
     setEditStock(null); showToast("Stock modifié ✓");
+  };
+
+  // ── Ajouter un lot à un article existant ──
+  const addLot = async () => {
+    if (!showAddLot || !lotForm.quantite || !lotForm.prixAchat) return;
+    const prixDiff = +lotForm.prixAchat !== getPrixActuel(showAddLot);
+    const newLot: Lot = {
+      id: Date.now(),
+      quantite: +lotForm.quantite,
+      prixAchat: +lotForm.prixAchat,
+      enAttente: true,
+      dateAjout: fmtDate(),
+    };
+    const articleMaj = { ...showAddLot, lots: [...(showAddLot.lots || []), newLot] };
+    const newStock = stockMigre.map((s: any) => s.id === showAddLot.id ? articleMaj : s);
+    setStock(newStock); await saveSync("stock", newStock);
+    setLotForm({ quantite: "1", prixAchat: "" });
+    setShowAddLot(null);
+    showToast(prixDiff ? "Lot ajouté (nouveau prix) — en attente 🚚" : "Lot ajouté — en attente 🚚");
+  };
+
+  // ── Livrer un lot (cocher = passer de enAttente à disponible) ──
+  const livrerLot = async (articleId: number, lotId: number) => {
+    const newStock = stockMigre.map((s: any) => {
+      if (s.id !== articleId) return s;
+      const newLots = s.lots.map((l: Lot) => l.id === lotId ? { ...l, enAttente: false } : l);
+      return { ...s, lots: newLots, quantite: getQuantiteDispo({ lots: newLots }) };
+    });
+    setStock(newStock); await saveSync("stock", newStock);
+    showToast("Stock disponible mis à jour ✓");
   };
 
   const deleteStock = async (id: number) => {
@@ -496,13 +648,14 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
 
   const addVente = async () => {
     if (!venteForm.stockId || !venteForm.prixVente) return;
-    const article = stock.find((s: any) => s.id === +venteForm.stockId);
+    const article = stockMigre.find((s: any) => s.id === +venteForm.stockId);
     if (!article) return;
     const isVentePerso = venteForm.vendeur === VENTE_PERSO_KEY;
     const vendeur = isVentePerso ? null : vendeurs.find((v: any) => v.nom === venteForm.vendeur);
     if (!isVentePerso && !vendeur) return;
     const prixVente = +venteForm.prixVente;
-    const benefBrut = prixVente - article.prixAchat;
+    const prixAchat = getPrixActuel(article);
+    const benefBrut = prixVente - prixAchat;
     const commissionMontant = isVentePerso ? 0 : benefBrut * (vendeur!.commission / 100);
     const partEntreprise = benefBrut - commissionMontant;
     const vente = {
@@ -512,14 +665,14 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
       ventePerso: isVentePerso,
       article: article.nom,
       photoUrl: article.photoUrl || "",
-      prixAchat: article.prixAchat, prixVente, benefBrut, commissionMontant, partEntreprise, note: venteForm.note,
+      prixAchat, prixVente, benefBrut, commissionMontant, partEntreprise, note: venteForm.note,
       validationStatut: undefined,
     };
     const newVentes = [vente, ...ventes];
-    const newStock = stock.map((s: any) => s.id === article.id ? { ...s, quantite: s.quantite - 1 } : s);
+    const newStock = stockMigre.map((s: any) => s.id === article.id ? decrementeStock(s) : s);
     setVentes(newVentes); setStock(newStock);
     await Promise.all([saveSync("ventes", newVentes), saveSync("stock", newStock)]);
-    setVenteForm({ vendeur: VENTE_PERSO_KEY, stockId: "", prixVente: "" , note: "" });
+    setVenteForm({ vendeur: VENTE_PERSO_KEY, stockId: "", prixVente: "", note: "" });
     setShowVente(false);
     showToast(isVentePerso ? `Vente perso ! Bénéfice : ${fmt(partEntreprise)} ✓` : `Bénéfice entreprise : ${fmt(partEntreprise)} ✓`);
   };
@@ -527,7 +680,7 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
   const deleteVente = async (id: number) => {
     const v = ventes.find((x: any) => x.id === id);
     const newVentes = ventes.filter((x: any) => x.id !== id);
-    const newStock = v ? stock.map((s: any) => s.nom === v.article ? { ...s, quantite: s.quantite + 1 } : s) : stock;
+    const newStock = v ? stockMigre.map((s: any) => s.nom === v.article ? incrementeStock(s) : s) : stockMigre;
     setVentes(newVentes); setStock(newStock);
     await Promise.all([saveSync("ventes", newVentes), saveSync("stock", newStock)]);
     showToast("Vente supprimée", "#ef4444");
@@ -592,21 +745,17 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
     return null;
   };
 
-  // Tâches : validation identique aux ventes
   const tachesPending = useMemo(() => taches.filter((t: any) => t.validationStatut === "pending"), [taches]);
   const tachesAffichees = taches.filter((t: any) => t.validationStatut !== "accepted");
   const nbTachesEnCours = tachesAffichees.filter((t: any) => t.statut !== "Fait").length + tachesPending.length;
 
   const handleTacheValidation = async (tacheId: number, decision: "accepted" | "refused") => {
-    const newTaches = taches.map((t: any) =>
-      t.id === tacheId ? { ...t, validationStatut: decision } : t
-    );
+    const newTaches = taches.map((t: any) => t.id === tacheId ? { ...t, validationStatut: decision } : t);
     setTaches(newTaches);
     await saveSync("taches", newTaches);
     showToast(decision === "accepted" ? "Tâche validée et archivée ✓" : "Validation refusée", decision === "accepted" ? "#22c55e" : "#ef4444");
   };
 
-  // Ventes affichées côté admin : on cache les "accepted"
   const ventesAffichees = ventes.filter((v: any) => v.validationStatut !== "accepted");
 
   return (
@@ -636,7 +785,7 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
           {[
             ["dashboard", "📊"],
             ["ventes", ventesPending.length > 0 ? `🛍️${ventesPending.length}` : "🛍️"],
-            ["stock", "📦"],
+            ["stock", nbLotsEnAttente > 0 ? `📦${nbLotsEnAttente}` : "📦"],
             ["vendeurs", "👥"],
             ["taches", (nbTachesEnCours + tachesPending.length) > 0 ? `🗒️${nbTachesEnCours + tachesPending.length}` : "🗒️"]
           ].map(([key, label]) => (
@@ -667,7 +816,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
               </div>
             </div>
 
-            {/* Bandeau validations en attente */}
             {ventesPending.length > 0 && (
               <div style={{ backgroundColor: "#fff7ed", border: "2px solid #fed7aa", borderRadius: "14px", padding: "14px", marginTop: "12px", display: "flex", alignItems: "center", gap: "10px" }}>
                 <div style={{ fontSize: "24px" }}>⏳</div>
@@ -683,6 +831,15 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
                 <div>
                   <div style={{ fontWeight: "800", color: "#7c3aed", fontSize: "14px" }}>{tachesPending.length} validation(s) tâche en attente</div>
                   <div style={{ fontSize: "12px", color: "#5b21b6", marginTop: "2px" }}>Vérifie l'onglet Tâches 🗒️</div>
+                </div>
+              </div>
+            )}
+            {nbLotsEnAttente > 0 && (
+              <div style={{ backgroundColor: "#fff7ed", border: "2px solid #fed7aa", borderRadius: "14px", padding: "14px", marginTop: "12px", display: "flex", alignItems: "center", gap: "10px" }}>
+                <div style={{ fontSize: "24px" }}>🚚</div>
+                <div>
+                  <div style={{ fontWeight: "800", color: "#ea580c", fontSize: "14px" }}>{nbLotsEnAttente} lot(s) en attente de livraison</div>
+                  <div style={{ fontSize: "12px", color: "#9a3412", marginTop: "2px" }}>Vérifie l'onglet Stock 📦</div>
                 </div>
               </div>
             )}
@@ -748,7 +905,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
         {/* ── VENTES ── */}
         {tab === "ventes" && (
           <div>
-            {/* Section validations en attente */}
             {ventesPending.length > 0 && (
               <div style={{ marginBottom: "20px" }}>
                 <div style={{ fontSize: "13px", fontWeight: "800", color: "#ea580c", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "10px" }}>
@@ -786,7 +942,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
               </div>
             )}
 
-            {/* Ventes normales (hors accepted) */}
             {ventesAffichees.length === 0
               ? <div style={{ textAlign: "center", padding: "60px 0", color: "#94a3b8" }}><div style={{ fontSize: "52px" }}>🛍️</div><div style={{ fontWeight: "700", marginTop: "12px" }}>Aucune vente</div></div>
               : ventesAffichees.map((v: any) => (
@@ -814,7 +969,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
                   </div>
                   {v.note && <div style={{ marginTop: "8px", fontSize: "12px", color: "#94a3b8", fontStyle: "italic" }}>📝 {v.note}</div>}
                   <BadgeValidation statut={v.validationStatut} />
-                  {/* Bouton valider côté admin aussi */}
                   {v.validationStatut !== "pending" && (
                     <button
                       onClick={() => handleValidation(v.id, "accepted")}
@@ -830,23 +984,68 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
 
         {/* ── STOCK ── */}
         {tab === "stock" && (
-          stock.length === 0
-            ? <div style={{ textAlign: "center", padding: "60px 0", color: "#94a3b8" }}><div style={{ fontSize: "52px" }}>📦</div><div style={{ fontWeight: "700", marginTop: "12px" }}>Stock vide</div></div>
-            : stock.map((s: any) => (
-              <div key={s.id} style={{ ...S.card, opacity: s.quantite === 0 ? 0.5 : 1 }}>
-                <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
-                  <ArticlePhoto url={s.photoUrl} size={60} />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: "700", fontSize: "16px", color: "#1a1a2e" }}>{s.nom}</div>
-                    <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "2px" }}>{s.categorie} · Acheté {fmt(s.prixAchat)}</div>
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                    <div style={{ fontSize: "28px", fontWeight: "800", color: s.quantite === 0 ? "#ef4444" : "#22c55e" }}>×{s.quantite}</div>
-                    <button onClick={() => setEditStock({ ...s })} style={{ backgroundColor: "#f1f5f9", border: "none", borderRadius: "10px", padding: "8px 12px", fontSize: "14px", cursor: "pointer", color: "#64748b" }}>✏️</button>
-                  </div>
+          <div>
+            {/* Section lots en attente */}
+            {stockMigre.some((s: any) => getQuantiteAttente(s) > 0) && (
+              <div style={{ marginBottom: "20px" }}>
+                <div style={{ fontSize: "13px", fontWeight: "800", color: "#ea580c", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "10px" }}>
+                  🚚 En attente de livraison
                 </div>
+                {stockMigre.filter((s: any) => getQuantiteAttente(s) > 0).map((s: any) => (
+                  <div key={s.id} style={{ ...S.card, border: "2px solid #fed7aa", backgroundColor: "#fffbf5" }}>
+                    <div style={{ display: "flex", gap: "12px", alignItems: "center", marginBottom: "10px" }}>
+                      <ArticlePhoto url={s.photoUrl} size={48} />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: "700", fontSize: "15px", color: "#1a1a2e" }}>{s.nom}</div>
+                        <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "2px" }}>{s.categorie}</div>
+                      </div>
+                    </div>
+                    {/* Lots en attente */}
+                    {(s.lots || []).filter((l: Lot) => l.enAttente).map((l: Lot) => (
+                      <div key={l.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", backgroundColor: "#fff7ed", borderRadius: "10px", padding: "10px 12px", marginBottom: "6px" }}>
+                        <div>
+                          <div style={{ fontSize: "13px", fontWeight: "700", color: "#1a1a2e" }}>×{l.quantite} — {fmt(l.prixAchat)} / unité</div>
+                          <div style={{ fontSize: "11px", color: "#94a3b8", marginTop: "2px" }}>Ajouté le {l.dateAjout}</div>
+                        </div>
+                        <button
+                          onClick={() => livrerLot(s.id, l.id)}
+                          style={{ backgroundColor: "#22c55e", color: "#fff", border: "none", borderRadius: "10px", padding: "8px 14px", fontSize: "13px", fontWeight: "700", cursor: "pointer", whiteSpace: "nowrap" }}>
+                          ✓ Reçu
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+                <div style={{ height: "1px", backgroundColor: "#e2e8f0", margin: "16px 0" }} />
               </div>
-            ))
+            )}
+
+            {/* Stock disponible */}
+            {stockMigre.length === 0
+              ? <div style={{ textAlign: "center", padding: "60px 0", color: "#94a3b8" }}><div style={{ fontSize: "52px" }}>📦</div><div style={{ fontWeight: "700", marginTop: "12px" }}>Stock vide</div></div>
+              : stockMigre.map((s: any) => {
+                  const dispo = getQuantiteDispo(s);
+                  const attente = getQuantiteAttente(s);
+                  const prixCourant = getPrixActuel(s);
+                  return (
+                    <div key={s.id} style={{ ...S.card, opacity: dispo === 0 && attente === 0 ? 0.5 : 1 }}>
+                      <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+                        <ArticlePhoto url={s.photoUrl} size={60} />
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontWeight: "700", fontSize: "16px", color: "#1a1a2e" }}>{s.nom}</div>
+                          <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "2px" }}>{s.categorie} · Achat {fmt(prixCourant)}</div>
+                          {attente > 0 && <div style={{ marginTop: "4px" }}><BadgeAttente quantite={attente} /></div>}
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                          <div style={{ fontSize: "28px", fontWeight: "800", color: dispo === 0 ? "#ef4444" : "#22c55e" }}>×{dispo}</div>
+                          <button onClick={() => setEditStock(migrateArticle(s))} style={{ backgroundColor: "#f1f5f9", border: "none", borderRadius: "10px", padding: "8px 12px", fontSize: "14px", cursor: "pointer", color: "#64748b" }}>✏️</button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+            }
+          </div>
         )}
 
         {/* ── VENDEURS ── */}
@@ -889,7 +1088,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
         {/* ── TÂCHES ADMIN ── */}
         {tab === "taches" && (
           <div>
-            {/* Section validations tâches en attente */}
             {tachesPending.length > 0 && (
               <div style={{ marginBottom: "20px" }}>
                 <div style={{ fontSize: "13px", fontWeight: "800", color: "#ea580c", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "10px" }}>
@@ -947,7 +1145,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
                         </div>
                       </div>
                       <BadgeValidation statut={t.validationStatut} />
-                      {/* Bouton valider tâche côté admin */}
                       {t.validationStatut !== "pending" && (
                         <button
                           onClick={() => handleTacheValidation(t.id, "accepted")}
@@ -971,7 +1168,7 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
         )}
       </div>
 
-      {/* FAB */}
+      {/* FABs */}
       <div style={{ position: "fixed", bottom: "32px", right: "20px", zIndex: 40 }}>
         {tab === "stock" && <button onClick={() => setShowStock(true)} style={{ width: "58px", height: "58px", borderRadius: "50%", backgroundColor: "#4ecdc4", border: "none", fontSize: "30px", color: "#fff", cursor: "pointer", boxShadow: "0 6px 24px rgba(78,205,196,0.5)", fontWeight: "700", display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>}
         {tab === "ventes" && <button onClick={() => setShowVente(true)} style={{ width: "58px", height: "58px", borderRadius: "50%", backgroundColor: "#e94560", border: "none", fontSize: "30px", color: "#fff", cursor: "pointer", boxShadow: "0 6px 24px rgba(233,69,96,0.5)", fontWeight: "700", display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>}
@@ -1001,7 +1198,7 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
                 {stockDispo.length === 0
                   ? <div style={{ backgroundColor: "#fef2f2", color: "#ef4444", padding: "14px", borderRadius: "12px", fontSize: "13px", fontWeight: "600", textAlign: "center" }}>⚠️ Stock vide</div>
                   : <Select value={venteForm.stockId} onChange={(v: string) => setVenteForm({ ...venteForm, stockId: v })} placeholder="Choisir un article..."
-                      options={stockDispo.map((s: any) => ({ value: String(s.id), label: `${s.nom} — achat ${fmt(s.prixAchat)} (×${s.quantite})` }))} />
+                      options={stockDispo.map((s: any) => ({ value: String(s.id), label: `${s.nom} — achat ${fmt(getPrixActuel(s))} (×${getQuantiteDispo(s)})` }))} />
                 }
               </Field>
               {articleVenteSelectionne && articleVenteSelectionne.photoUrl && (
@@ -1015,9 +1212,10 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
               )}
               <Field label="Prix de vente (€)"><TInput type="number" value={venteForm.prixVente} onChange={(v: string) => setVenteForm({ ...venteForm, prixVente: v })} placeholder="Ex: 50" /></Field>
               {venteForm.stockId && venteForm.prixVente && (() => {
-                const article = stock.find((s: any) => s.id === +venteForm.stockId);
+                const article = stockMigre.find((s: any) => s.id === +venteForm.stockId);
                 if (!article) return null;
-                const benef = +venteForm.prixVente - article.prixAchat;
+                const prixAchat = getPrixActuel(article);
+                const benef = +venteForm.prixVente - prixAchat;
                 const isPerso = venteForm.vendeur === VENTE_PERSO_KEY;
                 const vendeur = isPerso ? null : vendeurs.find((v: any) => v.nom === venteForm.vendeur);
                 const comm = isPerso ? 0 : benef * (vendeur?.commission ?? 0) / 100;
@@ -1039,13 +1237,18 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
         </div>
       )}
 
-      {/* ── MODAL AJOUT STOCK ── */}
+      {/* ── MODAL AJOUT STOCK (nouvel article → en attente) ── */}
       {showStock && (
         <div style={S.overlay} onClick={(e: any) => e.target === e.currentTarget && setShowStock(false)}>
           <div style={S.modal}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
-              <div style={{ fontSize: "18px", fontWeight: "800", color: "#1a1a2e" }}>📦 Ajouter au stock</div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+              <div style={{ fontSize: "18px", fontWeight: "800", color: "#1a1a2e" }}>📦 Nouvel article</div>
               <button onClick={() => setShowStock(false)} style={{ background: "none", border: "none", fontSize: "22px", color: "#94a3b8", cursor: "pointer" }}>✕</button>
+            </div>
+            {/* Bandeau "en attente de livraison" */}
+            <div style={{ backgroundColor: "#fff7ed", border: "2px solid #fed7aa", borderRadius: "12px", padding: "10px 14px", marginBottom: "16px", display: "flex", alignItems: "center", gap: "8px" }}>
+              <span style={{ fontSize: "18px" }}>🚚</span>
+              <span style={{ fontSize: "13px", fontWeight: "700", color: "#ea580c" }}>Sera ajouté en attente de livraison</span>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
               <Field label="Nom de l'article"><TInput value={stockForm.nom} onChange={(v: string) => setStockForm({ ...stockForm, nom: v })} placeholder="Ex: Sac Lacoste noir" /></Field>
@@ -1063,7 +1266,7 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
                     onError={(e: any) => { e.target.style.display = "none"; }} />
                 </div>
               )}
-              <button onClick={addStock} disabled={!stockForm.nom || !stockForm.prixAchat} style={S.btn("#4ecdc4", !stockForm.nom || !stockForm.prixAchat)}>Ajouter ✓</button>
+              <button onClick={addStock} disabled={!stockForm.nom || !stockForm.prixAchat} style={S.btn("#4ecdc4", !stockForm.nom || !stockForm.prixAchat)}>Ajouter en attente ✓</button>
             </div>
           </div>
         </div>
@@ -1080,10 +1283,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
             <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
               <Field label="Nom"><TInput value={editStock.nom} onChange={(v: string) => setEditStock({ ...editStock, nom: v })} placeholder="Nom" /></Field>
               <Field label="Catégorie"><Select value={editStock.categorie} onChange={(v: string) => setEditStock({ ...editStock, categorie: v })} options={CATEGORIES} /></Field>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-                <Field label="Prix d'achat (€)"><TInput type="number" value={editStock.prixAchat} onChange={(v: string) => setEditStock({ ...editStock, prixAchat: v })} placeholder="Prix" /></Field>
-                <Field label="Quantité"><TInput type="number" value={editStock.quantite} onChange={(v: string) => setEditStock({ ...editStock, quantite: v })} placeholder="Qté" /></Field>
-              </div>
               <Field label="🖼️ URL Photo (optionnel)">
                 <TInput value={editStock.photoUrl || ""} onChange={(v: string) => setEditStock({ ...editStock, photoUrl: v })} placeholder="https://..." />
               </Field>
@@ -1093,6 +1292,70 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
                     onError={(e: any) => { e.target.style.display = "none"; }} />
                 </div>
               )}
+
+              {/* ── Bouton Ajouter du stock (nouveau lot) ── */}
+              <div style={{ backgroundColor: "#f0fdf4", border: "2px solid #bbf7d0", borderRadius: "14px", padding: "14px" }}>
+                <div style={{ fontSize: "12px", fontWeight: "800", color: "#16a34a", marginBottom: "10px", textTransform: "uppercase" }}>➕ Ajouter du stock</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "10px" }}>
+                  <Field label="Quantité à ajouter">
+                    <TInput type="number" value={lotForm.quantite} onChange={(v: string) => setLotForm({ ...lotForm, quantite: v })} placeholder="Ex: 10" />
+                  </Field>
+                  <Field label="Prix d'achat (€)">
+                    <TInput type="number" value={lotForm.prixAchat} onChange={(v: string) => setLotForm({ ...lotForm, prixAchat: v })} placeholder={fmt(getPrixActuel(editStock))} />
+                  </Field>
+                </div>
+                {lotForm.prixAchat && +lotForm.prixAchat !== getPrixActuel(editStock) && (
+                  <div style={{ backgroundColor: "#fff7ed", borderRadius: "10px", padding: "8px 12px", fontSize: "12px", color: "#ea580c", fontWeight: "700", marginBottom: "10px" }}>
+                    ⚠️ Prix différent du stock actuel ({fmt(getPrixActuel(editStock))})<br />
+                    <span style={{ fontWeight: "400", color: "#9a3412" }}>Le nouveau prix s'appliquera quand l'ancien stock sera épuisé.</span>
+                  </div>
+                )}
+                <button
+                  onClick={async () => {
+                    if (!lotForm.quantite || !lotForm.prixAchat) return;
+                    const newLot: Lot = { id: Date.now(), quantite: +lotForm.quantite, prixAchat: +lotForm.prixAchat, enAttente: true, dateAjout: fmtDate() };
+                    const articleMaj = { ...editStock, lots: [...(editStock.lots || []), newLot] };
+                    const newStock = stockMigre.map((s: any) => s.id === editStock.id ? articleMaj : s);
+                    setStock(newStock); await saveSync("stock", newStock);
+                    setEditStock(articleMaj);
+                    setLotForm({ quantite: "1", prixAchat: "" });
+                    showToast("Lot ajouté en attente de livraison 🚚");
+                  }}
+                  disabled={!lotForm.quantite || !lotForm.prixAchat}
+                  style={{ ...S.btn("#22c55e", !lotForm.quantite || !lotForm.prixAchat), padding: "12px" }}>
+                  🚚 Ajouter en attente de livraison
+                </button>
+              </div>
+
+              {/* Lots existants */}
+              {editStock.lots && editStock.lots.length > 0 && (
+                <div>
+                  <div style={{ fontSize: "11px", fontWeight: "700", color: "#64748b", textTransform: "uppercase", marginBottom: "8px" }}>Lots</div>
+                  {editStock.lots.map((l: Lot) => (
+                    <div key={l.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", backgroundColor: l.enAttente ? "#fff7ed" : "#f0fdf4", borderRadius: "10px", padding: "10px 12px", marginBottom: "6px" }}>
+                      <div>
+                        <div style={{ fontSize: "13px", fontWeight: "700", color: "#1a1a2e" }}>×{l.quantite} — {fmt(l.prixAchat)}</div>
+                        <div style={{ fontSize: "11px", color: "#94a3b8", marginTop: "2px" }}>{l.enAttente ? "🚚 En attente" : "✅ Disponible"} · {l.dateAjout}</div>
+                      </div>
+                      {l.enAttente && (
+                        <button
+                          onClick={async () => {
+                            const newLots = editStock.lots.map((x: Lot) => x.id === l.id ? { ...x, enAttente: false } : x);
+                            const articleMaj = { ...editStock, lots: newLots, quantite: getQuantiteDispo({ lots: newLots }) };
+                            const newStock = stockMigre.map((s: any) => s.id === editStock.id ? articleMaj : s);
+                            setStock(newStock); await saveSync("stock", newStock);
+                            setEditStock(articleMaj);
+                            showToast("Lot livré ✓");
+                          }}
+                          style={{ backgroundColor: "#22c55e", color: "#fff", border: "none", borderRadius: "8px", padding: "6px 12px", fontSize: "12px", fontWeight: "700", cursor: "pointer" }}>
+                          ✓ Reçu
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
               <button onClick={saveEditStock} style={S.btn("#4ecdc4", false)}>Sauvegarder ✓</button>
               <button onClick={() => deleteStock(editStock.id)} style={S.btn("#ef4444", false)}>🗑️ Supprimer</button>
             </div>
@@ -1231,25 +1494,19 @@ export default function App() {
 
   const handleAddVente = async (vente: any, articleId: number) => {
     const newVentes = [vente, ...ventes];
-    const newStock = stock.map((s: any) => s.id === articleId ? { ...s, quantite: s.quantite - 1 } : s);
+    const newStock = stock.map(migrateArticle).map((s: any) => s.id === articleId ? decrementeStock(s) : s);
     setVentes(newVentes); setStock(newStock);
     await Promise.all([save("ventes", newVentes), save("stock", newStock)]);
   };
 
-  // Vendeur demande validation → statut "pending"
   const handleRequestValidation = async (venteId: number) => {
-    const newVentes = ventes.map((v: any) =>
-      v.id === venteId ? { ...v, validationStatut: "pending" } : v
-    );
+    const newVentes = ventes.map((v: any) => v.id === venteId ? { ...v, validationStatut: "pending" } : v);
     setVentes(newVentes);
     await save("ventes", newVentes);
   };
 
-  // Vendeur demande validation tâche → statut "pending"
   const handleRequestTacheValidation = async (tacheId: number) => {
-    const newTaches = taches.map((t: any) =>
-      t.id === tacheId ? { ...t, validationStatut: "pending" } : t
-    );
+    const newTaches = taches.map((t: any) => t.id === tacheId ? { ...t, validationStatut: "pending" } : t);
     setTaches(newTaches);
     await save("taches", newTaches);
   };
