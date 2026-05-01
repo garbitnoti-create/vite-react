@@ -495,8 +495,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
   // Formulaire ajout stock (nouveau = toujours en attente de livraison)
   const [stockForm, setStockForm] = useState({ nom: "", categorie: "Vêtements", prixAchat: "", quantite: "1", photoUrl: "" });
 
-  // Formulaire "ajouter du stock" à un article existant
-  const [showAddLot, setShowAddLot] = useState<any>(null); // article concerné
   const [lotForm, setLotForm] = useState({ quantite: "1", prixAchat: "" });
 
   const [paiementForm, setPaiementForm] = useState({ montant: "", note: "" });
@@ -610,24 +608,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
     setEditStock(null); showToast("Stock modifié ✓");
   };
 
-  // ── Ajouter un lot à un article existant ──
-  const addLot = async () => {
-    if (!showAddLot || !lotForm.quantite || !lotForm.prixAchat) return;
-    const prixDiff = +lotForm.prixAchat !== getPrixActuel(showAddLot);
-    const newLot: Lot = {
-      id: Date.now(),
-      quantite: +lotForm.quantite,
-      prixAchat: +lotForm.prixAchat,
-      enAttente: true,
-      dateAjout: fmtDate(),
-    };
-    const articleMaj = { ...showAddLot, lots: [...(showAddLot.lots || []), newLot] };
-    const newStock = stockMigre.map((s: any) => s.id === showAddLot.id ? articleMaj : s);
-    setStock(newStock); await saveSync("stock", newStock);
-    setLotForm({ quantite: "1", prixAchat: "" });
-    setShowAddLot(null);
-    showToast(prixDiff ? "Lot ajouté (nouveau prix) — en attente 🚚" : "Lot ajouté — en attente 🚚");
-  };
 
   // ── Livrer un lot (cocher = passer de enAttente à disponible) ──
   const livrerLot = async (articleId: number, lotId: number) => {
