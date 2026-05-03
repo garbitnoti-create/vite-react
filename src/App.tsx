@@ -33,6 +33,23 @@ const fmtDate = () => new Date().toLocaleDateString("fr-FR");
 const moisActuel = () => { const d = new Date(); return `${d.getMonth()}-${d.getFullYear()}`; };
 const moisLabel = () => new Date().toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
 
+// ── Helpers semaine ──────────────────────────────────────────────────────────
+// Retourne la clé "semaine" d'une date au format "dd/mm/yyyy"
+const getSemaineKey = (dateStr: string): string => {
+  const parts = dateStr.split("/");
+  if (parts.length !== 3) return "";
+  const [d, m, y] = parts.map(Number);
+  const date = new Date(y, m - 1, d);
+  // Lundi de la semaine
+  const day = date.getDay();
+  const diff = (day === 0 ? -6 : 1 - day);
+  const lundi = new Date(date);
+  lundi.setDate(date.getDate() + diff);
+  return `${lundi.getDate()}/${lundi.getMonth() + 1}/${lundi.getFullYear()}`;
+};
+
+const semaineActuelleKey = (): string => getSemaineKey(fmtDate());
+
 const getMoisLabel = (moisKey: string) => {
   const [m, y] = moisKey.split("-").map(Number);
   const d = new Date(y, m, 1);
@@ -44,20 +61,13 @@ const IS_ADMIN = params.get("admin") === "true";
 const VENDEUR_PARAM = params.get("v")?.toLowerCase() || null;
 const VENTE_PERSO_KEY = "__MOI__";
 
-// Lot de stock : chaque article peut avoir plusieurs lots avec des prix différents
-// Un lot "enAttente" = livraison pas encore reçue
 type Lot = {
   id: number;
   quantite: number;
   prixAchat: number;
-  enAttente: boolean; // true = en attente de livraison, false = disponible
+  enAttente: boolean;
   dateAjout: string;
 };
-
-// Structure d'un article stock
-// quantite = total disponible (somme des lots non en attente)
-// prixAchat = prix du lot actuel disponible (calculé dynamiquement)
-// lots = tableau des lots (disponibles + en attente)
 
 type ValidationStatut = "pending" | "accepted" | "refused" | undefined;
 
@@ -117,9 +127,6 @@ async function fbSave(key: string, data: any) {
   await setDoc(doc(db, "vinted", key), { data: JSON.stringify(data) });
 }
 
-// ── Helpers pour la gestion des lots ──────────────────────────────────────────
-
-// Calcule le prix d'achat courant d'un article (premier lot disponible, sinon premier lot en attente)
 function getPrixActuel(article: any): number {
   if (!article.lots || article.lots.length === 0) return article.prixAchat || 0;
   const lotDispo = article.lots.find((l: Lot) => !l.enAttente && l.quantite > 0);
@@ -129,19 +136,16 @@ function getPrixActuel(article: any): number {
   return article.lots[0]?.prixAchat || article.prixAchat || 0;
 }
 
-// Calcule la quantité disponible (lots non en attente)
 function getQuantiteDispo(article: any): number {
   if (!article.lots) return article.quantite || 0;
   return article.lots.filter((l: Lot) => !l.enAttente).reduce((s: number, l: Lot) => s + l.quantite, 0);
 }
 
-// Calcule la quantité en attente de livraison
 function getQuantiteAttente(article: any): number {
   if (!article.lots) return 0;
   return article.lots.filter((l: Lot) => l.enAttente).reduce((s: number, l: Lot) => s + l.quantite, 0);
 }
 
-// Décrémente le stock d'un article en respectant l'ordre des lots (FIFO)
 function decrementeStock(article: any): any {
   if (!article.lots || article.lots.length === 0) {
     return { ...article, quantite: Math.max(0, (article.quantite || 0) - 1) };
@@ -156,12 +160,10 @@ function decrementeStock(article: any): any {
   return { ...article, lots: newLots, quantite: getQuantiteDispo({ lots: newLots }) };
 }
 
-// Incrémente le stock (annulation vente)
 function incrementeStock(article: any): any {
   if (!article.lots || article.lots.length === 0) {
     return { ...article, quantite: (article.quantite || 0) + 1 };
   }
-  // Ajoute au dernier lot disponible
   const idx = article.lots.reduce((last: number, l: Lot, i: number) => (!l.enAttente ? i : last), -1);
   if (idx === -1) {
     const newLot: Lot = { id: Date.now(), quantite: 1, prixAchat: getPrixActuel(article), enAttente: false, dateAjout: fmtDate() };
@@ -171,9 +173,8 @@ function incrementeStock(article: any): any {
   return { ...article, lots: newLots, quantite: getQuantiteDispo({ lots: newLots }) };
 }
 
-// Migre un article ancien format (sans lots) vers le nouveau format
 function migrateArticle(article: any): any {
-  if (article.lots) return article; // déjà migré
+  if (article.lots) return article;
   const lot: Lot = {
     id: article.id,
     quantite: article.quantite || 0,
@@ -182,6 +183,20 @@ function migrateArticle(article: any): any {
     dateAjout: article.dateAjout || fmtDate(),
   };
   return { ...article, lots: [lot] };
+}
+
+// ── Notification helper ──────────────────────────────────────────────────────
+async function sendNotificationTache(nomVendeur: string, titreTache: string) {
+  if (!("Notification" in window)) return;
+  if (Notification.permission === "default") {
+    await Notification.requestPermission();
+  }
+  if (Notification.permission === "granted") {
+    new Notification(`📋 Nouvelle tâche pour ${nomVendeur}`, {
+      body: titreTache,
+      icon: "https://cdn.jsdelivr.net/npm/emoji-datasource-apple/img/apple/64/1f4cb.png",
+    });
+  }
 }
 
 function PageInconnue() {
@@ -210,12 +225,74 @@ function BadgeValidation({ statut }: { statut: ValidationStatut }) {
   );
 }
 
-// ── Badge "en attente de livraison" ──────────────────────────────────────────
 function BadgeAttente({ quantite }: { quantite: number }) {
   if (quantite <= 0) return null;
   return (
     <div style={{ backgroundColor: "#fff7ed", borderRadius: "8px", padding: "4px 8px", fontSize: "11px", fontWeight: "700", color: "#ea580c", display: "inline-flex", alignItems: "center", gap: "4px" }}>
       🚚 {quantite} en attente de livraison
+    </div>
+  );
+}
+
+// ── Sous-onglets période (Semaine / Mois / Total) ────────────────────────────
+function PeriodeTabs({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <div style={{ display: "flex", gap: "6px", marginBottom: "14px", backgroundColor: "#f1f5f9", borderRadius: "12px", padding: "4px" }}>
+      {[["semaine", "📅 Semaine"], ["mois", "🗓️ Mois"], ["total", "🏆 Total"]].map(([key, label]) => (
+        <button key={key} onClick={() => onChange(key)}
+          style={{ flex: 1, padding: "8px 4px", borderRadius: "8px", border: "none", fontSize: "11px", fontWeight: "700", cursor: "pointer",
+            backgroundColor: value === key ? "#1a1a2e" : "transparent",
+            color: value === key ? "#fff" : "#64748b" }}>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ── Classement vendeurs (utilisé dans admin + vendeur) ───────────────────────
+function ClassementVendeurs({ vendeurs, ventes, nomVendeurCourant }: { vendeurs: any[]; ventes: any[]; nomVendeurCourant?: string }) {
+  const [periode, setPeriode] = useState("semaine");
+
+  const filteredVentes = useMemo(() => {
+    if (periode === "semaine") return ventes.filter((v: any) => getSemaineKey(v.date) === semaineActuelleKey());
+    if (periode === "mois") return ventes.filter((v: any) => v.mois === moisActuel());
+    return ventes;
+  }, [ventes, periode]);
+
+  const classement = useMemo(() => {
+    return vendeurs.map((v: any) => {
+      const vv = filteredVentes.filter((x: any) => x.vendeur === v.nom);
+      return { nom: v.nom, nb: vv.length, ca: vv.reduce((s: number, x: any) => s + x.prixVente, 0) };
+    }).sort((a: any, b: any) => b.nb - a.nb || b.ca - a.ca);
+  }, [filteredVentes, vendeurs]);
+
+  const labelPeriode = periode === "semaine" ? "cette semaine" : periode === "mois" ? "ce mois" : "tous les temps";
+
+  return (
+    <div>
+      <div style={{ fontSize: "13px", fontWeight: "800", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "12px" }}>🏆 Classement des vendeurs</div>
+      <PeriodeTabs value={periode} onChange={setPeriode} />
+      <div style={{ fontSize: "11px", color: "#94a3b8", marginBottom: "10px", textAlign: "center" }}>Classement {labelPeriode}</div>
+      {classement.every((v: any) => v.nb === 0)
+        ? <div style={{ textAlign: "center", color: "#94a3b8", padding: "30px 0", fontSize: "13px" }}>Aucune vente {labelPeriode}</div>
+        : classement.map((v: any, i: number) => (
+          <div key={v.nom} style={{ ...S.card, border: nomVendeurCourant && v.nom.toLowerCase() === nomVendeurCourant.toLowerCase() ? "2px solid #e94560" : "1px solid #f1f5f9" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+              <div style={{ width: "36px", height: "36px", borderRadius: "50%", backgroundColor: i === 0 ? "#f7b731" : i === 1 ? "#94a3b8" : i === 2 ? "#cd7f32" : "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: "800", fontSize: "16px", color: i < 3 ? "#fff" : "#64748b", flexShrink: 0 }}>
+                {i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : i + 1}
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: "700", color: "#1a1a2e", fontSize: "15px" }}>
+                  {v.nom} {nomVendeurCourant && v.nom.toLowerCase() === nomVendeurCourant.toLowerCase() ? "👈 toi" : ""}
+                </div>
+                <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "2px" }}>{v.nb} vente(s)</div>
+              </div>
+              <div style={{ fontWeight: "800", color: "#4ecdc4", fontSize: "15px" }}>{fmt(v.ca)}</div>
+            </div>
+          </div>
+        ))
+      }
     </div>
   );
 }
@@ -229,7 +306,6 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, taches, on
 
   const showToast = (msg: string, color = "#22c55e") => { setToast({ msg, color }); setTimeout(() => setToast(null), 3000); };
 
-  // Stock disponible (hors attente de livraison)
   const stockDispo = stock.map(migrateArticle).filter((s: any) => getQuantiteDispo(s) > 0);
 
   const mesVentes = ventes.filter((v: any) =>
@@ -246,13 +322,6 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, taches, on
     const totalPaye = paiements.filter((p: any) => p.vendeur.toLowerCase() === nomVendeur.toLowerCase()).reduce((s: number, p: any) => s + p.montant, 0);
     return totalDu - totalPaye;
   })();
-
-  const classement = useMemo(() => {
-    return vendeurs.map((v: any) => {
-      const vv = ventes.filter((x: any) => x.vendeur === v.nom);
-      return { nom: v.nom, nb: vv.length, ca: vv.reduce((s: number, x: any) => s + x.prixVente, 0) };
-    }).sort((a: any, b: any) => b.nb - a.nb);
-  }, [ventes, vendeurs]);
 
   const articleSelectionne = stock.map(migrateArticle).find((s: any) => s.id === +venteForm.stockId);
 
@@ -380,24 +449,9 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, taches, on
             ))
         )}
 
+        {/* ── CLASSEMENT VENDEUR : maintenant avec sous-onglets période ── */}
         {tab === "classement" && (
-          <div>
-            <div style={{ fontSize: "13px", fontWeight: "800", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "12px" }}>🏆 Classement des vendeurs</div>
-            {classement.map((v: any, i: number) => (
-              <div key={v.nom} style={{ ...S.card, border: v.nom.toLowerCase() === nomVendeur.toLowerCase() ? "2px solid #e94560" : "1px solid #f1f5f9" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                  <div style={{ width: "36px", height: "36px", borderRadius: "50%", backgroundColor: i === 0 ? "#f7b731" : i === 1 ? "#94a3b8" : i === 2 ? "#cd7f32" : "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: "800", fontSize: "16px", color: i < 3 ? "#fff" : "#64748b", flexShrink: 0 }}>
-                    {i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : i + 1}
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: "700", color: "#1a1a2e", fontSize: "15px" }}>{v.nom} {v.nom.toLowerCase() === nomVendeur.toLowerCase() ? "👈 toi" : ""}</div>
-                    <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "2px" }}>{v.nb} vente(s)</div>
-                  </div>
-                  <div style={{ fontWeight: "800", color: "#4ecdc4", fontSize: "15px" }}>{fmt(v.ca)}</div>
-                </div>
-              </div>
-            ))}
-          </div>
+          <ClassementVendeurs vendeurs={vendeurs} ventes={ventes} nomVendeurCourant={nomVendeur} />
         )}
 
         {tab === "stock" && (
@@ -492,32 +546,35 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
   const [syncing, setSyncing] = useState(false);
   const [venteForm, setVenteForm] = useState({ vendeur: VENTE_PERSO_KEY, stockId: "", prixVente: "", note: "" });
 
-  // Formulaire ajout stock (nouveau = toujours en attente de livraison)
+  // ── Sous-onglet période dans l'onglet vendeurs ──
+  const [vendeurPeriode, setVendeurPeriode] = useState("semaine");
+
   const [stockForm, setStockForm] = useState({ nom: "", categorie: "Vêtements", prixAchat: "", quantite: "1", photoUrl: "" });
-
   const [lotForm, setLotForm] = useState({ quantite: "1", prixAchat: "" });
-
   const [paiementForm, setPaiementForm] = useState({ montant: "", note: "" });
   const [showAjustement, setShowAjustement] = useState<any>(null);
   const [ajustementForm, setAjustementForm] = useState({ montant: "", note: "", type: "prime" });
-
   const [showTache, setShowTache] = useState(false);
   const [tacheForm, setTacheForm] = useState({ titre: "", description: "", assigneA: "", priorite: "Normale", echeance: "" });
 
   const showToast = (msg: string, color = "#22c55e") => { setToast({ msg, color }); setTimeout(() => setToast(null), 3000); };
   const saveSync = async (key: string, data: any) => { setSyncing(true); await save(key, data); setTimeout(() => setSyncing(false), 800); };
 
-  // Stock migré (assure compatibilité)
   const stockMigre = useMemo(() => stock.map(migrateArticle), [stock]);
-
   const stockDispo = stockMigre.filter((s: any) => getQuantiteDispo(s) > 0);
   const ventesMonth = useMemo(() => ventes.filter((v: any) => v.mois === moisActuel()), [ventes]);
   const ventesPending = useMemo(() => ventes.filter((v: any) => v.validationStatut === "pending"), [ventes]);
 
-  // Nombre total de lots en attente de livraison
   const nbLotsEnAttente = useMemo(() => stockMigre.reduce((total: number, s: any) => {
     return total + (s.lots || []).filter((l: Lot) => l.enAttente).length;
   }, 0), [stockMigre]);
+
+  // ── Ventes filtrées selon la période choisie dans l'onglet vendeurs ──
+  const ventesParPeriodeVendeurs = useMemo(() => {
+    if (vendeurPeriode === "semaine") return ventes.filter((v: any) => getSemaineKey(v.date) === semaineActuelleKey());
+    if (vendeurPeriode === "mois") return ventes.filter((v: any) => v.mois === moisActuel());
+    return ventes;
+  }, [ventes, vendeurPeriode]);
 
   const stats = useMemo(() => ({
     ca: ventes.reduce((s: number, v: any) => s + v.prixVente, 0),
@@ -552,6 +609,7 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
     return Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([nom, nb]) => ({ nom: nom.length > 14 ? nom.slice(0, 14) + "…" : nom, nb }));
   }, [ventes]);
 
+  // ── Stats vendeurs selon la période ──
   const statsVendeurs = useMemo(() => vendeurs.map((v: any) => {
     const vv = ventes.filter((x: any) => x.vendeur === v.nom);
     const vvM = ventesMonth.filter((x: any) => x.vendeur === v.nom);
@@ -560,9 +618,29 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
     return { ...v, nb: vv.length, nbMonth: vvM.length, ca: vv.reduce((s: number, x: any) => s + x.prixVente, 0), commissionTotal: totalDu, commissionMonth: vvM.reduce((s: number, x: any) => s + x.commissionMontant, 0), totalPaye, solde: totalDu - totalPaye };
   }), [ventes, ventesMonth, paiements, vendeurs]);
 
+  // ── Stats vendeurs filtrées par période (pour l'onglet vendeurs) ──
+  const statsVendeursPeriode = useMemo(() => vendeurs.map((v: any) => {
+    const vv = ventesParPeriodeVendeurs.filter((x: any) => x.vendeur === v.nom);
+    const totalDu = ventes.filter((x: any) => x.vendeur === v.nom).reduce((s: number, x: any) => s + x.commissionMontant, 0);
+    const totalPaye = paiements.filter((p: any) => p.vendeur === v.nom).reduce((s: number, p: any) => s + p.montant, 0);
+    return {
+      ...v,
+      nb: vv.length,
+      ca: vv.reduce((s: number, x: any) => s + x.prixVente, 0),
+      commissionPeriode: vv.reduce((s: number, x: any) => s + x.commissionMontant, 0),
+      commissionTotal: totalDu,
+      totalPaye,
+      solde: totalDu - totalPaye,
+    };
+  }), [ventesParPeriodeVendeurs, ventes, paiements, vendeurs]);
+
+  // ── Classement vendeurs par période (pour l'onglet vendeurs admin) ──
+  const classementPeriode = useMemo(() => {
+    return [...statsVendeursPeriode].sort((a: any, b: any) => b.nb - a.nb || b.ca - a.ca);
+  }, [statsVendeursPeriode]);
+
   const articleVenteSelectionne = stockMigre.find((s: any) => s.id === +venteForm.stockId);
 
-  // ── Validation ventes ──
   const handleValidation = async (venteId: number, decision: "accepted" | "refused") => {
     const newVentes = ventes.map((v: any) => v.id === venteId ? { ...v, validationStatut: decision } : v);
     setVentes(newVentes);
@@ -570,22 +648,21 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
     showToast(decision === "accepted" ? "Vente validée et archivée ✓" : "Validation refusée", decision === "accepted" ? "#22c55e" : "#ef4444");
   };
 
-  // ── Ajout article (directement en attente de livraison) ──
   const addStock = async () => {
     if (!stockForm.nom || !stockForm.prixAchat) return;
     const premierLot: Lot = {
       id: Date.now(),
       quantite: +stockForm.quantite,
       prixAchat: +stockForm.prixAchat,
-      enAttente: true, // ← toujours en attente de livraison
+      enAttente: true,
       dateAjout: fmtDate(),
     };
     const newArticle = {
       id: Date.now() + 1,
       nom: stockForm.nom,
       categorie: stockForm.categorie,
-      prixAchat: +stockForm.prixAchat, // conservé pour compatibilité
-      quantite: 0, // 0 car en attente
+      prixAchat: +stockForm.prixAchat,
+      quantite: 0,
       photoUrl: stockForm.photoUrl,
       mois: moisActuel(),
       lots: [premierLot],
@@ -597,7 +674,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
     showToast("Article ajouté — en attente de livraison 🚚");
   };
 
-  // ── Modifier article existant ──
   const saveEditStock = async () => {
     if (!editStock) return;
     const newStock = stockMigre.map((s: any) => s.id === editStock.id
@@ -608,8 +684,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
     setEditStock(null); showToast("Stock modifié ✓");
   };
 
-
-  // ── Livrer un lot (cocher = passer de enAttente à disponible) ──
   const livrerLot = async (articleId: number, lotId: number) => {
     const newStock = stockMigre.map((s: any) => {
       if (s.id !== articleId) return s;
@@ -685,13 +759,17 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
     showToast(`Ajustement enregistré ✓`);
   };
 
+  // ── Ajout tâche avec notification ──
   const addTache = async () => {
     if (!tacheForm.titre || !tacheForm.assigneA) return;
     const t = { id: Date.now(), date: fmtDate(), statut: "À faire", ...tacheForm };
     const newTaches = [t, ...taches];
     setTaches(newTaches); await saveSync("taches", newTaches);
     setTacheForm({ titre: "", description: "", assigneA: "", priorite: "Normale", echeance: "" });
-    setShowTache(false); showToast("Tâche ajoutée ✓");
+    setShowTache(false);
+    showToast("Tâche ajoutée ✓");
+    // Envoi notification
+    await sendNotificationTache(tacheForm.assigneA, tacheForm.titre);
   };
 
   const cycleStatut = async (id: number) => {
@@ -737,6 +815,13 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
   };
 
   const ventesAffichees = ventes.filter((v: any) => v.validationStatut !== "accepted");
+
+  // ── Label de la période courante ──
+  const labelPeriodeVendeurs = vendeurPeriode === "semaine"
+    ? `semaine du ${semaineActuelleKey()}`
+    : vendeurPeriode === "mois"
+    ? moisLabel()
+    : "tous les temps";
 
   return (
     <div style={{ minHeight: "100vh", backgroundColor: "#f1f5f9", fontFamily: "system-ui, -apple-system, sans-serif", maxWidth: "480px", margin: "0 auto" }}>
@@ -965,7 +1050,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
         {/* ── STOCK ── */}
         {tab === "stock" && (
           <div>
-            {/* Section lots en attente */}
             {stockMigre.some((s: any) => getQuantiteAttente(s) > 0) && (
               <div style={{ marginBottom: "20px" }}>
                 <div style={{ fontSize: "13px", fontWeight: "800", color: "#ea580c", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "10px" }}>
@@ -980,7 +1064,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
                         <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "2px" }}>{s.categorie}</div>
                       </div>
                     </div>
-                    {/* Lots en attente */}
                     {(s.lots || []).filter((l: Lot) => l.enAttente).map((l: Lot) => (
                       <div key={l.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", backgroundColor: "#fff7ed", borderRadius: "10px", padding: "10px 12px", marginBottom: "6px" }}>
                         <div>
@@ -1000,7 +1083,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
               </div>
             )}
 
-            {/* Stock disponible */}
             {stockMigre.length === 0
               ? <div style={{ textAlign: "center", padding: "60px 0", color: "#94a3b8" }}><div style={{ fontSize: "52px" }}>📦</div><div style={{ fontWeight: "700", marginTop: "12px" }}>Stock vide</div></div>
               : stockMigre.map((s: any) => {
@@ -1028,42 +1110,106 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
           </div>
         )}
 
-        {/* ── VENDEURS ── */}
-        {tab === "vendeurs" && statsVendeurs.map((v: any) => (
-          <div key={v.nom} style={S.card}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
-              <div style={{ fontWeight: "800", fontSize: "18px", color: "#1a1a2e" }}>{v.nom}</div>
-              <div style={{ backgroundColor: "#e94560", color: "#fff", fontSize: "12px", fontWeight: "700", padding: "4px 14px", borderRadius: "100px" }}>{v.commission}%</div>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px", marginBottom: "12px" }}>
-              <MiniStat label="Ventes" value={v.nb} />
-              <MiniStat label="CA" value={fmt(v.ca)} color="#4ecdc4" />
-              <MiniStat label="Comm. totale" value={fmt(v.commissionTotal)} color="#f7b731" />
-            </div>
-            <div style={{ backgroundColor: v.solde > 0 ? "#fef2f2" : "#f0fdf4", borderRadius: "12px", padding: "12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div>
-                <div style={{ fontSize: "10px", fontWeight: "700", color: v.solde > 0 ? "#ef4444" : "#16a34a", textTransform: "uppercase" }}>Solde à payer</div>
-                <div style={{ fontSize: "20px", fontWeight: "800", color: v.solde > 0 ? "#ef4444" : "#16a34a" }}>{fmt(v.solde)}</div>
-                <div style={{ fontSize: "11px", color: "#94a3b8", marginTop: "2px" }}>Déjà payé : {fmt(v.totalPaye)}</div>
+        {/* ── VENDEURS (avec sous-onglets période + classement) ── */}
+        {tab === "vendeurs" && (
+          <div>
+            {/* Sous-onglets période */}
+            <PeriodeTabs value={vendeurPeriode} onChange={setVendeurPeriode} />
+
+            {/* Résumé global de la période */}
+            <div style={{ ...S.card, background: "linear-gradient(135deg, #1a1a2e 0%, #2d2d5e 100%)", color: "#fff", marginBottom: "16px" }}>
+              <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.5)", textTransform: "uppercase", fontWeight: "700", marginBottom: "8px" }}>
+                {labelPeriodeVendeurs}
               </div>
-              <div style={{ display: "flex", gap: "8px" }}>
-                {v.solde > 0 && <button onClick={() => { setShowPaiement(v.nom); setPaiementForm({ montant: v.solde.toFixed(2), note: "" }); }} style={{ backgroundColor: "#e94560", color: "#fff", border: "none", borderRadius: "12px", padding: "10px 16px", fontWeight: "700", fontSize: "14px", cursor: "pointer" }}>💸 Payer</button>}
-                <button onClick={() => { setShowAjustement(v.nom); setAjustementForm({ montant: "", note: "", type: "prime" }); }} style={{ backgroundColor: "#a29bfe", color: "#fff", border: "none", borderRadius: "12px", padding: "10px 16px", fontWeight: "700", fontSize: "14px", cursor: "pointer" }}>✏️</button>
-              </div>
-            </div>
-            {paiements.filter((p: any) => p.vendeur === v.nom).length > 0 && (
-              <div style={{ marginTop: "10px" }}>
-                <div style={{ fontSize: "10px", fontWeight: "700", color: "#94a3b8", textTransform: "uppercase", marginBottom: "6px" }}>Historique</div>
-                {paiements.filter((p: any) => p.vendeur === v.nom).slice(0, 3).map((p: any) => (
-                  <div key={p.id} style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", color: "#64748b", padding: "4px 0", borderBottom: "1px solid #f1f5f9" }}>
-                    <span>{p.date} {p.note ? `· ${p.note}` : ""}</span>
-                    <span style={{ fontWeight: "700", color: "#16a34a" }}>-{fmt(p.montant)}</span>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px" }}>
+                {[
+                  ["CA", fmt(statsVendeursPeriode.reduce((s: number, v: any) => s + v.ca, 0)), "#4ecdc4"],
+                  ["Commissions", fmt(statsVendeursPeriode.reduce((s: number, v: any) => s + v.commissionPeriode, 0)), "#f7b731"],
+                  ["Ventes", statsVendeursPeriode.reduce((s: number, v: any) => s + v.nb, 0), "#a29bfe"],
+                ].map(([l, v, c]: any) => (
+                  <div key={l} style={{ textAlign: "center" }}>
+                    <div style={{ fontSize: "9px", color: "rgba(255,255,255,0.4)", textTransform: "uppercase", fontWeight: "700" }}>{l}</div>
+                    <div style={{ fontSize: "15px", fontWeight: "800", color: c, marginTop: "4px" }}>{v}</div>
                   </div>
                 ))}
               </div>
-            )}
+            </div>
+
+            {/* Classement de la période */}
+            <div style={{ fontSize: "13px", fontWeight: "800", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "10px" }}>
+              🏆 Classement
+            </div>
+            {classementPeriode.every((v: any) => v.nb === 0)
+              ? <div style={{ textAlign: "center", color: "#94a3b8", padding: "16px 0 24px", fontSize: "13px" }}>Aucune vente sur cette période</div>
+              : classementPeriode.map((v: any, i: number) => (
+                <div key={v.nom} style={{ ...S.card, marginBottom: "8px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                    <div style={{ width: "32px", height: "32px", borderRadius: "50%", backgroundColor: i === 0 ? "#f7b731" : i === 1 ? "#94a3b8" : i === 2 ? "#cd7f32" : "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: "800", fontSize: "14px", color: i < 3 ? "#fff" : "#64748b", flexShrink: 0 }}>
+                      {i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : i + 1}
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: "700", color: "#1a1a2e", fontSize: "14px" }}>{v.nom}</div>
+                      <div style={{ fontSize: "11px", color: "#94a3b8" }}>{v.nb} vente(s)</div>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontWeight: "800", color: "#4ecdc4", fontSize: "14px" }}>{fmt(v.ca)}</div>
+                      <div style={{ fontSize: "10px", color: "#f7b731", fontWeight: "700" }}>comm. {fmt(v.commissionPeriode)}</div>
+                    </div>
+                  </div>
+                </div>
+              ))
+            }
+
+            {/* Séparateur */}
+            <div style={{ height: "1px", backgroundColor: "#e2e8f0", margin: "20px 0" }} />
+
+            {/* Fiches individuelles vendeurs (solde & paiement — toujours en total) */}
+            <div style={{ fontSize: "13px", fontWeight: "800", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "12px" }}>
+              👥 Détail par vendeur
+            </div>
+            {statsVendeurs.map((v: any) => (
+              <div key={v.nom} style={S.card}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
+                  <div style={{ fontWeight: "800", fontSize: "18px", color: "#1a1a2e" }}>{v.nom}</div>
+                  <div style={{ backgroundColor: "#e94560", color: "#fff", fontSize: "12px", fontWeight: "700", padding: "4px 14px", borderRadius: "100px" }}>{v.commission}%</div>
+                </div>
+                {/* Stats de la période sélectionnée pour ce vendeur */}
+                {(() => {
+                  const vp = statsVendeursPeriode.find((x: any) => x.nom === v.nom);
+                  return (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px", marginBottom: "12px" }}>
+                      <MiniStat label={`Ventes (${vendeurPeriode === "semaine" ? "sem." : vendeurPeriode === "mois" ? "mois" : "total"})`} value={vp?.nb ?? 0} />
+                      <MiniStat label="CA période" value={fmt(vp?.ca ?? 0)} color="#4ecdc4" />
+                      <MiniStat label="Comm. période" value={fmt(vp?.commissionPeriode ?? 0)} color="#f7b731" />
+                    </div>
+                  );
+                })()}
+                <div style={{ backgroundColor: v.solde > 0 ? "#fef2f2" : "#f0fdf4", borderRadius: "12px", padding: "12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div>
+                    <div style={{ fontSize: "10px", fontWeight: "700", color: v.solde > 0 ? "#ef4444" : "#16a34a", textTransform: "uppercase" }}>Solde à payer</div>
+                    <div style={{ fontSize: "20px", fontWeight: "800", color: v.solde > 0 ? "#ef4444" : "#16a34a" }}>{fmt(v.solde)}</div>
+                    <div style={{ fontSize: "11px", color: "#94a3b8", marginTop: "2px" }}>Déjà payé : {fmt(v.totalPaye)}</div>
+                  </div>
+                  <div style={{ display: "flex", gap: "8px" }}>
+                    {v.solde > 0 && <button onClick={() => { setShowPaiement(v.nom); setPaiementForm({ montant: v.solde.toFixed(2), note: "" }); }} style={{ backgroundColor: "#e94560", color: "#fff", border: "none", borderRadius: "12px", padding: "10px 16px", fontWeight: "700", fontSize: "14px", cursor: "pointer" }}>💸 Payer</button>}
+                    <button onClick={() => { setShowAjustement(v.nom); setAjustementForm({ montant: "", note: "", type: "prime" }); }} style={{ backgroundColor: "#a29bfe", color: "#fff", border: "none", borderRadius: "12px", padding: "10px 16px", fontWeight: "700", fontSize: "14px", cursor: "pointer" }}>✏️</button>
+                  </div>
+                </div>
+                {paiements.filter((p: any) => p.vendeur === v.nom).length > 0 && (
+                  <div style={{ marginTop: "10px" }}>
+                    <div style={{ fontSize: "10px", fontWeight: "700", color: "#94a3b8", textTransform: "uppercase", marginBottom: "6px" }}>Historique</div>
+                    {paiements.filter((p: any) => p.vendeur === v.nom).slice(0, 3).map((p: any) => (
+                      <div key={p.id} style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", color: "#64748b", padding: "4px 0", borderBottom: "1px solid #f1f5f9" }}>
+                        <span>{p.date} {p.note ? `· ${p.note}` : ""}</span>
+                        <span style={{ fontWeight: "700", color: "#16a34a" }}>-{fmt(p.montant)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
-        ))}
+        )}
 
         {/* ── TÂCHES ADMIN ── */}
         {tab === "taches" && (
@@ -1217,7 +1363,7 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
         </div>
       )}
 
-      {/* ── MODAL AJOUT STOCK (nouvel article → en attente) ── */}
+      {/* ── MODAL AJOUT STOCK ── */}
       {showStock && (
         <div style={S.overlay} onClick={(e: any) => e.target === e.currentTarget && setShowStock(false)}>
           <div style={S.modal}>
@@ -1225,7 +1371,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
               <div style={{ fontSize: "18px", fontWeight: "800", color: "#1a1a2e" }}>📦 Nouvel article</div>
               <button onClick={() => setShowStock(false)} style={{ background: "none", border: "none", fontSize: "22px", color: "#94a3b8", cursor: "pointer" }}>✕</button>
             </div>
-            {/* Bandeau "en attente de livraison" */}
             <div style={{ backgroundColor: "#fff7ed", border: "2px solid #fed7aa", borderRadius: "12px", padding: "10px 14px", marginBottom: "16px", display: "flex", alignItems: "center", gap: "8px" }}>
               <span style={{ fontSize: "18px" }}>🚚</span>
               <span style={{ fontSize: "13px", fontWeight: "700", color: "#ea580c" }}>Sera ajouté en attente de livraison</span>
@@ -1272,8 +1417,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
                     onError={(e: any) => { e.target.style.display = "none"; }} />
                 </div>
               )}
-
-              {/* ── Bouton Ajouter du stock (nouveau lot) ── */}
               <div style={{ backgroundColor: "#f0fdf4", border: "2px solid #bbf7d0", borderRadius: "14px", padding: "14px" }}>
                 <div style={{ fontSize: "12px", fontWeight: "800", color: "#16a34a", marginBottom: "10px", textTransform: "uppercase" }}>➕ Ajouter du stock</div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "10px" }}>
@@ -1307,7 +1450,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
                 </button>
               </div>
 
-              {/* Lots existants */}
               {editStock.lots && editStock.lots.length > 0 && (
                 <div>
                   <div style={{ fontSize: "11px", fontWeight: "700", color: "#64748b", textTransform: "uppercase", marginBottom: "8px" }}>Lots</div>
@@ -1397,6 +1539,11 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
               <div style={{ fontSize: "18px", fontWeight: "800", color: "#1a1a2e" }}>🗒️ Nouvelle tâche</div>
               <button onClick={() => setShowTache(false)} style={{ background: "none", border: "none", fontSize: "22px", color: "#94a3b8", cursor: "pointer" }}>✕</button>
+            </div>
+            {/* Bandeau info notification */}
+            <div style={{ backgroundColor: "#f5f3ff", border: "2px solid #ddd6fe", borderRadius: "12px", padding: "10px 14px", marginBottom: "16px", display: "flex", alignItems: "center", gap: "8px" }}>
+              <span style={{ fontSize: "16px" }}>🔔</span>
+              <span style={{ fontSize: "12px", fontWeight: "600", color: "#7c3aed" }}>Une notification sera envoyée au vendeur</span>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
               <Field label="Titre de la tâche">
