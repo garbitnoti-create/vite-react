@@ -535,6 +535,36 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, taches, on
   );
 }
 
+// ── Formulaire ajout vendeur (utilisé dans les settings) ────────────────────
+function NouveauVendeurForm({ vendeurs, setVendeurs, showToast }: any) {
+  const [nom, setNom] = useState("");
+  const [comm, setComm] = useState("20");
+  return (
+    <div style={{ backgroundColor: "#f8fafc", border: "2px dashed #e2e8f0", borderRadius: "14px", padding: "14px", marginBottom: "16px" }}>
+      <div style={{ fontSize: "11px", fontWeight: "700", color: "#64748b", textTransform: "uppercase" as const, marginBottom: "10px" }}>➕ Ajouter un vendeur</div>
+      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+        <input type="text" value={nom} onChange={(e: any) => setNom(e.target.value)} placeholder="Nom du vendeur"
+          style={{ ...S.input, flex: 1, padding: "10px 14px", fontSize: "14px" }} />
+        <input type="number" value={comm} onChange={(e: any) => setComm(e.target.value)} min="0" max="100" placeholder="20"
+          style={{ ...S.input, width: "60px", padding: "10px", textAlign: "center" as const, fontSize: "14px" }} />
+        <span style={{ color: "#64748b", fontWeight: "700", fontSize: "15px" }}>%</span>
+        <button onClick={() => {
+          const n = nom.trim();
+          if (!n) return;
+          if (vendeurs.find((v: any) => v.nom.toLowerCase() === n.toLowerCase())) {
+            showToast("Ce vendeur existe déjà !", "#ef4444"); return;
+          }
+          setVendeurs((prev: any) => [...prev, { nom: n, commission: +comm || 20 }]);
+          setNom(""); setComm("20");
+          showToast(`${n} ajouté ✓`);
+        }} style={{ backgroundColor: "#1a1a2e", color: "#fff", border: "none", borderRadius: "10px", padding: "10px 14px", fontWeight: "700", fontSize: "13px", cursor: "pointer", whiteSpace: "nowrap" as const }}>
+          ✓ Ajouter
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── APP ADMIN ─────────────────────────────────────────────────────────────────
 function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, paiements, setPaiements, taches, setTaches, save }: any) {
   const [tab, setTab] = useState("dashboard");
@@ -1576,19 +1606,24 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
         <div style={S.overlay} onClick={(e: any) => e.target === e.currentTarget && setShowSettings(false)}>
           <div style={S.modal}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
-              <div style={{ fontSize: "18px", fontWeight: "800", color: "#1a1a2e" }}>⚙️ Commissions vendeurs</div>
+              <div style={{ fontSize: "18px", fontWeight: "800", color: "#1a1a2e" }}>⚙️ Vendeurs & Commissions</div>
               <button onClick={() => setShowSettings(false)} style={{ background: "none", border: "none", fontSize: "22px", color: "#94a3b8", cursor: "pointer" }}>✕</button>
             </div>
             <div style={{ marginBottom: "12px", backgroundColor: "#f0fdf4", borderRadius: "12px", padding: "12px", fontSize: "12px", color: "#16a34a", fontWeight: "600" }}>🔄 Synchronisé en temps réel</div>
             <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginBottom: "16px" }}>
               {vendeurs.map((v: any, i: number) => (
-                <div key={v.nom} style={{ display: "flex", alignItems: "center", gap: "12px", backgroundColor: "#fff", borderRadius: "12px", padding: "12px 16px", border: "1px solid #e2e8f0" }}>
+                <div key={v.nom} style={{ display: "flex", alignItems: "center", gap: "10px", backgroundColor: "#fff", borderRadius: "12px", padding: "12px 16px", border: "1px solid #e2e8f0" }}>
                   <div style={{ fontWeight: "700", color: "#1a1a2e", flex: 1, fontSize: "15px" }}>{v.nom}</div>
-                  <input type="number" min="0" max="100" value={v.commission} onChange={(e: any) => setVendeurs((prev: any) => prev.map((x: any, j: number) => j === i ? { ...x, commission: +e.target.value } : x))} style={{ width: "64px", border: "2px solid #e2e8f0", borderRadius: "10px", padding: "8px 10px", fontSize: "16px", fontWeight: "700", color: "#1a1a2e", backgroundColor: "#fff", textAlign: "center", outline: "none" }} />
+                  <input type="number" min="0" max="100" value={v.commission}
+                    onChange={(e: any) => setVendeurs((prev: any) => prev.map((x: any, j: number) => j === i ? { ...x, commission: +e.target.value } : x))}
+                    style={{ width: "64px", border: "2px solid #e2e8f0", borderRadius: "10px", padding: "8px 10px", fontSize: "16px", fontWeight: "700", color: "#1a1a2e", backgroundColor: "#fff", textAlign: "center", outline: "none" }} />
                   <span style={{ color: "#64748b", fontWeight: "700", fontSize: "15px" }}>%</span>
+                  <button onClick={() => setVendeurs((prev: any) => prev.filter((_: any, j: number) => j !== i))}
+                    style={{ background: "none", border: "none", color: "#cbd5e1", fontSize: "18px", cursor: "pointer", padding: "0 2px", lineHeight: 1 }}>✕</button>
                 </div>
               ))}
             </div>
+            <NouveauVendeurForm vendeurs={vendeurs} setVendeurs={setVendeurs} showToast={showToast} />
             <button onClick={saveVendeurs} style={S.btn("#1a1a2e", false)}>Sauvegarder ✓</button>
           </div>
         </div>
