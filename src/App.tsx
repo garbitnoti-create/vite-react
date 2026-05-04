@@ -24,6 +24,7 @@ const VENDEURS_INIT = [
   { nom: "Cos", commission: 20 },
   { nom: "Cata", commission: 20 },
   { nom: "Piepie", commission: 20 },
+  { nom: "adm JR", commission: 20 },
 ];
 
 const CATEGORIES = ["Vêtements", "Chaussures", "Sacs", "Accessoires", "Sport", "Autre"];
