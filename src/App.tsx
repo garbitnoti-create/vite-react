@@ -35,13 +35,11 @@ const moisActuel = () => { const d = new Date(); return `${d.getMonth()}-${d.get
 const moisLabel = () => new Date().toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
 
 // ── Helpers semaine ──────────────────────────────────────────────────────────
-// Retourne la clé "semaine" d'une date au format "dd/mm/yyyy"
 const getSemaineKey = (dateStr: string): string => {
   const parts = dateStr.split("/");
   if (parts.length !== 3) return "";
   const [d, m, y] = parts.map(Number);
   const date = new Date(y, m - 1, d);
-  // Lundi de la semaine
   const day = date.getDay();
   const diff = (day === 0 ? -6 : 1 - day);
   const lundi = new Date(date);
@@ -450,7 +448,6 @@ function AppVendeur({ nomVendeur, vendeurs, stock, ventes, paiements, taches, on
             ))
         )}
 
-        {/* ── CLASSEMENT VENDEUR : maintenant avec sous-onglets période ── */}
         {tab === "classement" && (
           <ClassementVendeurs vendeurs={vendeurs} ventes={ventes} nomVendeurCourant={nomVendeur} />
         )}
@@ -577,7 +574,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
   const [syncing, setSyncing] = useState(false);
   const [venteForm, setVenteForm] = useState({ vendeur: VENTE_PERSO_KEY, stockId: "", prixVente: "", note: "" });
 
-  // ── Sous-onglet période dans l'onglet vendeurs ──
   const [vendeurPeriode, setVendeurPeriode] = useState("semaine");
 
   const [stockForm, setStockForm] = useState({ nom: "", categorie: "Vêtements", prixAchat: "", quantite: "1", photoUrl: "" });
@@ -600,7 +596,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
     return total + (s.lots || []).filter((l: Lot) => l.enAttente).length;
   }, 0), [stockMigre]);
 
-  // ── Ventes filtrées selon la période choisie dans l'onglet vendeurs ──
   const ventesParPeriodeVendeurs = useMemo(() => {
     if (vendeurPeriode === "semaine") return ventes.filter((v: any) => getSemaineKey(v.date) === semaineActuelleKey());
     if (vendeurPeriode === "mois") return ventes.filter((v: any) => v.mois === moisActuel());
@@ -640,7 +635,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
     return Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([nom, nb]) => ({ nom: nom.length > 14 ? nom.slice(0, 14) + "…" : nom, nb }));
   }, [ventes]);
 
-  // ── Stats vendeurs selon la période ──
   const statsVendeurs = useMemo(() => vendeurs.map((v: any) => {
     const vv = ventes.filter((x: any) => x.vendeur === v.nom);
     const vvM = ventesMonth.filter((x: any) => x.vendeur === v.nom);
@@ -649,7 +643,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
     return { ...v, nb: vv.length, nbMonth: vvM.length, ca: vv.reduce((s: number, x: any) => s + x.prixVente, 0), commissionTotal: totalDu, commissionMonth: vvM.reduce((s: number, x: any) => s + x.commissionMontant, 0), totalPaye, solde: totalDu - totalPaye };
   }), [ventes, ventesMonth, paiements, vendeurs]);
 
-  // ── Stats vendeurs filtrées par période (pour l'onglet vendeurs) ──
   const statsVendeursPeriode = useMemo(() => vendeurs.map((v: any) => {
     const vv = ventesParPeriodeVendeurs.filter((x: any) => x.vendeur === v.nom);
     const totalDu = ventes.filter((x: any) => x.vendeur === v.nom).reduce((s: number, x: any) => s + x.commissionMontant, 0);
@@ -665,7 +658,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
     };
   }), [ventesParPeriodeVendeurs, ventes, paiements, vendeurs]);
 
-  // ── Classement vendeurs par période (pour l'onglet vendeurs admin) ──
   const classementPeriode = useMemo(() => {
     return [...statsVendeursPeriode].sort((a: any, b: any) => b.nb - a.nb || b.ca - a.ca);
   }, [statsVendeursPeriode]);
@@ -790,7 +782,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
     showToast(`Ajustement enregistré ✓`);
   };
 
-  // ── Ajout tâche avec notification ──
   const addTache = async () => {
     if (!tacheForm.titre || !tacheForm.assigneA) return;
     const t = { id: Date.now(), date: fmtDate(), statut: "À faire", ...tacheForm };
@@ -799,7 +790,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
     setTacheForm({ titre: "", description: "", assigneA: "", priorite: "Normale", echeance: "" });
     setShowTache(false);
     showToast("Tâche ajoutée ✓");
-    // Envoi notification
     await sendNotificationTache(tacheForm.assigneA, tacheForm.titre);
   };
 
@@ -816,6 +806,31 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
   };
 
   const saveVendeurs = async () => { await saveSync("vendeurs", vendeurs); setShowSettings(false); showToast("Commissions sauvegardées ✓"); };
+
+  // ── NOUVEAU : modifier la quantité d'un lot directement dans editStock ──────
+  const modifierQuantiteLot = async (lotId: number, delta: number) => {
+    if (!editStock) return;
+    const newLots = editStock.lots
+      .map((l: Lot) => l.id === lotId ? { ...l, quantite: Math.max(0, l.quantite + delta) } : l)
+      .filter((l: Lot) => l.quantite > 0); // supprime automatiquement si quantité tombe à 0
+    const articleMaj = { ...editStock, lots: newLots, quantite: getQuantiteDispo({ lots: newLots }) };
+    const newStock = stockMigre.map((s: any) => s.id === editStock.id ? articleMaj : s);
+    setStock(newStock);
+    setEditStock(articleMaj);
+    await saveSync("stock", newStock);
+  };
+
+  const supprimerLot = async (lotId: number) => {
+    if (!editStock) return;
+    const newLots = editStock.lots.filter((l: Lot) => l.id !== lotId);
+    const articleMaj = { ...editStock, lots: newLots, quantite: getQuantiteDispo({ lots: newLots }) };
+    const newStock = stockMigre.map((s: any) => s.id === editStock.id ? articleMaj : s);
+    setStock(newStock);
+    setEditStock(articleMaj);
+    await saveSync("stock", newStock);
+    showToast("Lot supprimé", "#ef4444");
+  };
+  // ─────────────────────────────────────────────────────────────────────────────
 
   const PRIORITE_COLOR: any = { "Haute": "#f7b731", "Urgente": "#e94560", "Normale": "#4ecdc4" };
   const STATUT_COLOR: any = { "À faire": "#94a3b8", "En cours": "#a29bfe", "Fait": "#22c55e" };
@@ -847,7 +862,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
 
   const ventesAffichees = ventes.filter((v: any) => v.validationStatut !== "accepted");
 
-  // ── Label de la période courante ──
   const labelPeriodeVendeurs = vendeurPeriode === "semaine"
     ? `semaine du ${semaineActuelleKey()}`
     : vendeurPeriode === "mois"
@@ -1141,13 +1155,11 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
           </div>
         )}
 
-        {/* ── VENDEURS (avec sous-onglets période + classement) ── */}
+        {/* ── VENDEURS ── */}
         {tab === "vendeurs" && (
           <div>
-            {/* Sous-onglets période */}
             <PeriodeTabs value={vendeurPeriode} onChange={setVendeurPeriode} />
 
-            {/* Résumé global de la période */}
             <div style={{ ...S.card, background: "linear-gradient(135deg, #1a1a2e 0%, #2d2d5e 100%)", color: "#fff", marginBottom: "16px" }}>
               <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.5)", textTransform: "uppercase", fontWeight: "700", marginBottom: "8px" }}>
                 {labelPeriodeVendeurs}
@@ -1166,7 +1178,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
               </div>
             </div>
 
-            {/* Classement de la période */}
             <div style={{ fontSize: "13px", fontWeight: "800", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "10px" }}>
               🏆 Classement
             </div>
@@ -1191,10 +1202,8 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
               ))
             }
 
-            {/* Séparateur */}
             <div style={{ height: "1px", backgroundColor: "#e2e8f0", margin: "20px 0" }} />
 
-            {/* Fiches individuelles vendeurs (solde & paiement — toujours en total) */}
             <div style={{ fontSize: "13px", fontWeight: "800", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "12px" }}>
               👥 Détail par vendeur
             </div>
@@ -1204,7 +1213,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
                   <div style={{ fontWeight: "800", fontSize: "18px", color: "#1a1a2e" }}>{v.nom}</div>
                   <div style={{ backgroundColor: "#e94560", color: "#fff", fontSize: "12px", fontWeight: "700", padding: "4px 14px", borderRadius: "100px" }}>{v.commission}%</div>
                 </div>
-                {/* Stats de la période sélectionnée pour ce vendeur */}
                 {(() => {
                   const vp = statsVendeursPeriode.find((x: any) => x.nom === v.nom);
                   return (
@@ -1481,29 +1489,51 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
                 </button>
               </div>
 
+              {/* ── LISTE DES LOTS avec contrôles −/+ et suppression ── */}
               {editStock.lots && editStock.lots.length > 0 && (
                 <div>
                   <div style={{ fontSize: "11px", fontWeight: "700", color: "#64748b", textTransform: "uppercase", marginBottom: "8px" }}>Lots</div>
                   {editStock.lots.map((l: Lot) => (
                     <div key={l.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", backgroundColor: l.enAttente ? "#fff7ed" : "#f0fdf4", borderRadius: "10px", padding: "10px 12px", marginBottom: "6px" }}>
-                      <div>
-                        <div style={{ fontSize: "13px", fontWeight: "700", color: "#1a1a2e" }}>×{l.quantite} — {fmt(l.prixAchat)}</div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: "13px", fontWeight: "700", color: "#1a1a2e" }}>{fmt(l.prixAchat)} / unité</div>
                         <div style={{ fontSize: "11px", color: "#94a3b8", marginTop: "2px" }}>{l.enAttente ? "🚚 En attente" : "✅ Disponible"} · {l.dateAjout}</div>
                       </div>
-                      {l.enAttente && (
+                      {/* Contrôles quantité */}
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                         <button
-                          onClick={async () => {
-                            const newLots = editStock.lots.map((x: Lot) => x.id === l.id ? { ...x, enAttente: false } : x);
-                            const articleMaj = { ...editStock, lots: newLots, quantite: getQuantiteDispo({ lots: newLots }) };
-                            const newStock = stockMigre.map((s: any) => s.id === editStock.id ? articleMaj : s);
-                            setStock(newStock); await saveSync("stock", newStock);
-                            setEditStock(articleMaj);
-                            showToast("Lot livré ✓");
-                          }}
-                          style={{ backgroundColor: "#22c55e", color: "#fff", border: "none", borderRadius: "8px", padding: "6px 12px", fontSize: "12px", fontWeight: "700", cursor: "pointer" }}>
-                          ✓ Reçu
+                          onClick={() => modifierQuantiteLot(l.id, -1)}
+                          style={{ width: "28px", height: "28px", borderRadius: "8px", border: "none", backgroundColor: "#fef2f2", color: "#ef4444", fontSize: "16px", fontWeight: "800", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }}>
+                          −
                         </button>
-                      )}
+                        <span style={{ fontSize: "15px", fontWeight: "800", color: "#1a1a2e", minWidth: "28px", textAlign: "center" }}>
+                          ×{l.quantite}
+                        </span>
+                        <button
+                          onClick={() => modifierQuantiteLot(l.id, +1)}
+                          style={{ width: "28px", height: "28px", borderRadius: "8px", border: "none", backgroundColor: "#f0fdf4", color: "#16a34a", fontSize: "16px", fontWeight: "800", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }}>
+                          +
+                        </button>
+                        <button
+                          onClick={() => supprimerLot(l.id)}
+                          style={{ width: "28px", height: "28px", borderRadius: "8px", border: "none", backgroundColor: "#f1f5f9", color: "#94a3b8", fontSize: "14px", fontWeight: "700", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", marginLeft: "4px" }}>
+                          🗑️
+                        </button>
+                        {l.enAttente && (
+                          <button
+                            onClick={async () => {
+                              const newLots = editStock.lots.map((x: Lot) => x.id === l.id ? { ...x, enAttente: false } : x);
+                              const articleMaj = { ...editStock, lots: newLots, quantite: getQuantiteDispo({ lots: newLots }) };
+                              const newStock = stockMigre.map((s: any) => s.id === editStock.id ? articleMaj : s);
+                              setStock(newStock); await saveSync("stock", newStock);
+                              setEditStock(articleMaj);
+                              showToast("Lot livré ✓");
+                            }}
+                            style={{ backgroundColor: "#22c55e", color: "#fff", border: "none", borderRadius: "8px", padding: "6px 10px", fontSize: "11px", fontWeight: "700", cursor: "pointer", whiteSpace: "nowrap", marginLeft: "4px" }}>
+                            ✓ Reçu
+                          </button>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1571,7 +1601,6 @@ function AppAdmin({ vendeurs, setVendeurs, stock, setStock, ventes, setVentes, p
               <div style={{ fontSize: "18px", fontWeight: "800", color: "#1a1a2e" }}>🗒️ Nouvelle tâche</div>
               <button onClick={() => setShowTache(false)} style={{ background: "none", border: "none", fontSize: "22px", color: "#94a3b8", cursor: "pointer" }}>✕</button>
             </div>
-            {/* Bandeau info notification */}
             <div style={{ backgroundColor: "#f5f3ff", border: "2px solid #ddd6fe", borderRadius: "12px", padding: "10px 14px", marginBottom: "16px", display: "flex", alignItems: "center", gap: "8px" }}>
               <span style={{ fontSize: "16px" }}>🔔</span>
               <span style={{ fontSize: "12px", fontWeight: "600", color: "#7c3aed" }}>Une notification sera envoyée au vendeur</span>
